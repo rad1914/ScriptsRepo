@@ -8,6 +8,7 @@
 set -euo pipefail
 
 # ── Globals ──────────────────────────────────────────────────────────────────
+REAL_HOME="/home/"
 USERNAME="radwrld"
 HOSTNAME_VAL="$(cat /etc/hostname 2>/dev/null || echo unknown-host)"
 SWAP_DEVICE="/dev/sda4"

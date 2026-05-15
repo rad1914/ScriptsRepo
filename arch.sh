@@ -263,60 +263,35 @@ run_step "Regenerate GRUB config (post-resume params)" \
     grub-mkconfig -o /boot/grub/grub.cfg
 
 # =============================================================================
-# STAGE 9 — BitNet Build
+# STAGE 9 — llama.cpp Build
 # =============================================================================
-io "Stage 9 — BitNet Build"
+io "Stage 9 — llama.cpp Build"
 
-BITNET_BUILD_DEPS=(
-    cmake
-    ninja
-    clang
-    openmp
-    python
-    python-pip
-    git
-)
+LLAMA_DIR="$REAL_HOME/llama.cpp"
 
-critical_step "Install BitNet build dependencies" \
-    pacman -S --needed --noconfirm "${BITNET_BUILD_DEPS[@]}"
+critical_step "Install llama.cpp build dependencies" \
+    pacman -S --needed --noconfirm \
+        cmake ninja clang openmp git
 
-critical_step "Clone Microsoft BitNet repository" \
+critical_step "Clone llama.cpp repository" \
     bash -c "
-        rm -rf '$BITNET_DIR'
-        sudo -u '$USERNAME' git clone --recursive https://github.com/microsoft/BitNet.git '$BITNET_DIR'
+        rm -rf '$LLAMA_DIR'
+        sudo -u '$USERNAME' git clone https://github.com/ggerganov/llama.cpp.git '$LLAMA_DIR'
     "
 
-critical_step "Update git submodules" \
+critical_step "Configure llama.cpp build" \
     bash -c "
-        cd '$BITNET_DIR'
-        git submodule sync --recursive
-        sudo -u '$USERNAME' git submodule update --init --recursive
-    "
-
-critical_step "Configure build with CMake + Ninja" \
-    bash -c "
-        cd '$BITNET_DIR'
+        cd '$LLAMA_DIR'
         sudo -u '$USERNAME' cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++ \
             -DGGML_OPENMP=ON
     "
 
-critical_step "Compile BitNet" \
+critical_step "Compile llama.cpp" \
     bash -c "
-        cd '$BITNET_DIR'
+        cd '$LLAMA_DIR'
         sudo -u '$USERNAME' ninja -C build
     "
-
-# Optional compatibility patch for newer clang releases
-run_shell "Apply clang compatibility patch if needed" \
-    "PATCH_FILE='$BITNET_DIR/src/ggml-bitnet-mad.cpp'
-     if [[ -f \$PATCH_FILE ]]; then
-         sed -i \
-           's/int8_t \* y_col = y + col \* by;/const int8_t * y_col = y + col * by;/g' \
-           \$PATCH_FILE || true
-     fi"
 
 # =============================================================================
 # STAGE 10 — Model Download
@@ -335,7 +310,7 @@ critical_step "Download BitNet GGUF model from HuggingFace" \
 # =============================================================================
 io "Stage 11 — Inference Test"
 
-LLAMA_CLI="$BITNET_DIR/build/bin/llama-cli"
+LLAMA_CLI="$LLAMA_DIR/build/bin/llama-cli"
 
 critical_step "Validate model and binary exist, then run test inference" \
     "if [[ ! -f $LLAMA_CLI ]]; then

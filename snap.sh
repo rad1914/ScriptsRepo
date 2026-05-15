@@ -1,133 +1,222 @@
 #!/usr/bin/env bash
+# Automates Snapper + BTRFS snapshot integration for Arch Linux with GRUB boot snapshot support.
+# Run as root (or via sudo).
+
 set -uo pipefail
 
-failures=0
+# ─── Logging & Helpers ────────────────────────────────────────────────────────
 
-step() {
-  echo
-  echo "==> $1"
+FAILURES=0
+
+info()  { printf '\e[1;34m[INFO]\e[0m  %s\n' "$*"; }
+ok()    { printf '\e[1;32m[ OK ]\e[0m  %s\n' "$*"; }
+warn()  { printf '\e[1;33m[WARN]\e[0m  %s\n' "$*"; }
+fail()  { printf '\e[1;31m[FAIL]\e[0m  %s\n' "$*"; (( FAILURES++ )) || true; }
+
+# run_guarded <description> <cmd...>
+# Runs a command; on failure, increments FAILURES and continues.
+run_guarded() {
+    local desc="$1"; shift
+    info "$desc"
+    if "$@"; then
+        ok "$desc"
+    else
+        fail "$desc"
+    fi
 }
 
-run() {
-  local desc="$1"
-  shift
-  if ! "$@"; then
-    echo "!! Failed: $desc"
-    failures=$((failures + 1))
-    return 1
-  fi
+require_root() {
+    if [[ $EUID -ne 0 ]]; then
+        printf '\e[1;31m[ERROR]\e[0m Must be run as root.\n' >&2
+        exit 1
+    fi
 }
 
-step "Installing snapper stack"
-run "pacman install" sudo pacman -S --needed --noconfirm \
-  snapper \
-  snap-pac \
-  grub-btrfs \
-  inotify-tools \
-  less \
-  btrfs-progs
+# ─── Step 1: Require Root ─────────────────────────────────────────────────────
 
-step "Detecting BTRFS root device"
-ROOT_DEV="$(findmnt -no SOURCE / | sed 's/\[.*//')" || {
-  echo "!! Failed: could not detect root device"
-  failures=$((failures + 1))
-  ROOT_DEV=""
-}
-ROOT_UUID=""
-if [ -n "${ROOT_DEV:-}" ]; then
-  ROOT_UUID="$(blkid -s UUID -o value "$ROOT_DEV" 2>/dev/null || true)"
+require_root
+
+info "=== Arch BTRFS + Snapper + GRUB Setup ==="
+
+# ─── Step 2: Install Required Packages ───────────────────────────────────────
+
+info "--- Step 2: Install Required Packages ---"
+
+PACKAGES=(
+    snapper
+    snap-pac
+    grub-btrfs
+    btrfs-progs
+    inotify-tools   # grub-btrfs daemon dependency
+    findutils
+    util-linux
+)
+
+for pkg in "${PACKAGES[@]}"; do
+    if pacman -Qi "$pkg" &>/dev/null; then
+        ok "Already installed: $pkg"
+    else
+        run_guarded "Install $pkg" pacman -S --noconfirm --needed "$pkg"
+    fi
+done
+
+# ─── Step 3: Detect Root BTRFS Device ────────────────────────────────────────
+
+info "--- Step 3: Detect Root BTRFS Device ---"
+
+BTRFS_OK=true
+
+RAW_DEV=$(findmnt -n -o SOURCE /) || { fail "findmnt failed"; BTRFS_OK=false; }
+
+if $BTRFS_OK; then
+    # Strip subvolume suffix, e.g. /dev/sda2[/@] -> /dev/sda2
+    ROOT_DEV=$(echo "$RAW_DEV" | sed 's/\[.*\]$//')
+    info "Root device: $ROOT_DEV"
+
+    ROOT_UUID=$(blkid -s UUID -o value "$ROOT_DEV") || { fail "blkid failed on $ROOT_DEV"; BTRFS_OK=false; }
 fi
 
-echo "Root Device: ${ROOT_DEV:-unknown}"
-echo "Root UUID:   ${ROOT_UUID:-unknown}"
+if $BTRFS_OK; then
+    # Confirm filesystem is actually BTRFS
+    FS_TYPE=$(blkid -s TYPE -o value "$ROOT_DEV")
+    if [[ "$FS_TYPE" != "btrfs" ]]; then
+        fail "Root device $ROOT_DEV is $FS_TYPE, not btrfs. Aborting BTRFS-specific setup."
+        BTRFS_OK=false
+    else
+        ok "BTRFS root confirmed: $ROOT_DEV (UUID=$ROOT_UUID)"
+    fi
+fi
 
-if [ -z "${ROOT_DEV:-}" ] || [ -z "${ROOT_UUID:-}" ]; then
-  echo "!! Skipping BTRFS setup because root device or UUID is missing"
-  failures=$((failures + 1))
+# ─── Step 4: Prepare /.snapshots Subvolume ───────────────────────────────────
+
+if $BTRFS_OK; then
+    info "--- Step 4: Prepare /.snapshots Subvolume ---"
+
+    # Unmount if already mounted
+    if mountpoint -q /.snapshots 2>/dev/null; then
+        run_guarded "Unmount /.snapshots" umount /.snapshots
+    fi
+
+    # Remove stale directory or subvolume
+    if [[ -d /.snapshots ]]; then
+        if btrfs subvolume show /.snapshots &>/dev/null; then
+            run_guarded "Delete stale .snapshots subvolume" btrfs subvolume delete /.snapshots
+        else
+            run_guarded "Remove stale /.snapshots directory" rm -rf /.snapshots
+        fi
+    fi
+
+    # Create Snapper config for root (also creates /.snapshots subvolume)
+    if snapper list-configs 2>/dev/null | grep -q '^root '; then
+        ok "Snapper config 'root' already exists"
+    else
+        run_guarded "Create Snapper root config" snapper -c root create-config /
+    fi
+
+    # Ensure .snapshots subvolume exists (snapper may not create it on first run)
+    if ! btrfs subvolume show /.snapshots &>/dev/null; then
+        run_guarded "Create .snapshots BTRFS subvolume" btrfs subvolume create /.snapshots
+    else
+        ok ".snapshots subvolume exists"
+    fi
+fi
+
+# ─── Step 5: Configure Persistent fstab Mount ────────────────────────────────
+
+if $BTRFS_OK; then
+    info "--- Step 5: Configure Persistent fstab Mount ---"
+
+    mkdir -p /.snapshots
+
+    FSTAB_ENTRY="UUID=$ROOT_UUID  /.snapshots  btrfs  subvol=/.snapshots,defaults,noatime,compress=zstd  0 0"
+
+    if grep -q '/.snapshots' /etc/fstab; then
+        ok "/.snapshots already present in /etc/fstab"
+    else
+        run_guarded "Append /.snapshots to /etc/fstab" bash -c "echo '$FSTAB_ENTRY' >> /etc/fstab"
+    fi
+
+    run_guarded "Mount /.snapshots" mount /.snapshots
+fi
+
+# ─── Step 6: Set Permissions ──────────────────────────────────────────────────
+
+if $BTRFS_OK; then
+    info "--- Step 6: Set Permissions on /.snapshots ---"
+    run_guarded "chmod 750 /.snapshots" chmod 750 /.snapshots
+fi
+
+# ─── Step 7: Enable Automatic Snapshot Services ───────────────────────────────
+
+info "--- Step 7: Enable Automatic Snapshot Services ---"
+
+SERVICES=(
+    snapper-timeline.timer
+    snapper-cleanup.timer
+    grub-btrfsd.service
+)
+
+for svc in "${SERVICES[@]}"; do
+    run_guarded "Enable $svc" systemctl enable --now "$svc"
+done
+
+# ─── Step 8: Integrate Snapshots Into GRUB ───────────────────────────────────
+
+info "--- Step 8: Integrate Snapshots Into GRUB ---"
+
+run_guarded "Ensure /boot/grub exists" mkdir -p /boot/grub
+run_guarded "Regenerate grub.cfg" grub-mkconfig -o /boot/grub/grub.cfg
+
+# ─── Step 9: Create Initial Snapshots ────────────────────────────────────────
+
+if $BTRFS_OK; then
+    info "--- Step 9: Create Initial Snapshots ---"
+    run_guarded "Create baseline snapshot" \
+        snapper -c root create --description "Baseline - pre-configuration" --cleanup-algorithm number
+
+    run_guarded "Create post-setup snapshot" \
+        snapper -c root create --description "Fresh install - post snapper setup" --cleanup-algorithm number
+fi
+
+# ─── Step 10: Final Validation and Retry ─────────────────────────────────────
+
+info "--- Step 10: Final Validation and Retry ---"
+
+run_guarded "Mount all fstab entries (mount -a)" mount -a
+
+if $BTRFS_OK; then
+    if snapper -c root list &>/dev/null; then
+        ok "Snapper config 'root' is valid"
+    else
+        fail "Snapper config 'root' not accessible"
+    fi
+fi
+
+# Retry service enablement
+info "Retry: enabling snapshot services"
+for svc in "${SERVICES[@]}"; do
+    systemctl is-enabled "$svc" &>/dev/null || run_guarded "Retry enable $svc" systemctl enable --now "$svc"
+done
+
+# Retry GRUB regeneration
+info "Retry: regenerating GRUB config"
+run_guarded "Retry grub-mkconfig" grub-mkconfig -o /boot/grub/grub.cfg
+
+# List snapshots
+if $BTRFS_OK; then
+    info "Available snapshots:"
+    snapper -c root list || warn "Could not list snapshots"
+fi
+
+# ─── Step 11: Exit Status ─────────────────────────────────────────────────────
+
+echo ""
+info "=== Setup Complete ==="
+
+if [[ $FAILURES -eq 0 ]]; then
+    ok "All operations succeeded. BTRFS + Snapper + GRUB integration is active."
+    exit 0
 else
-  step "Preparing /.snapshots subvolume"
-
-  sudo umount /.snapshots 2>/dev/null || true
-  sudo rm -rf /.snapshots
-
-  if sudo btrfs subvolume list / | grep -q 'path .snapshots$'; then
-    run "delete existing .snapshots subvolume" \
-      sudo btrfs subvolume delete /.snapshots
-  fi
-
-  step "Creating snapper config"
-  run "snapper create-config" \
-    sudo snapper -c root create-config /
-
-  step "Preparing /.snapshots mount"
-
-  if sudo btrfs subvolume list / | grep -q 'path .snapshots$'; then
-    echo "==> .snapshots subvolume exists"
-  else
-    echo "!! .snapshots subvolume was not created"
-    failures=$((failures + 1))
-  fi
-
-  run "create /.snapshots directory" sudo mkdir -p /.snapshots
-
-  if grep -q '\.snapshots' /etc/fstab; then
-    echo "==> fstab entry for .snapshots already present"
-  else
-    run "append fstab entry" bash -c \
-      "echo 'UUID=$ROOT_UUID /.snapshots btrfs subvol=.snapshots,compress=zstd,noatime 0 0' | sudo tee -a /etc/fstab >/dev/null"
-  fi
-
-  run "mount /.snapshots" sudo mount /.snapshots
-
-  step "Fixing permissions"
-  run "chmod /.snapshots" sudo chmod 750 /.snapshots
-
-  step "Enabling automatic snapshots"
-  run "enable snapper-timeline.timer" sudo systemctl enable --now snapper-timeline.timer
-  run "enable snapper-cleanup.timer" sudo systemctl enable --now snapper-cleanup.timer
-  run "enable grub-btrfsd" sudo systemctl enable --now grub-btrfsd
-
-  step "Ensuring GRUB directories"
-  run "mkdir /boot/grub" sudo mkdir -p /boot/grub
-
-  step "Regenerating GRUB"
-  run "grub-mkconfig" sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-  step "Creating initial snapshot"
-  run "create initial snapshot" sudo snapper -c root create --description "Initial clean snapshot"
-fi
-
-step "Final mount sync"
-run "mount -a" sudo mount -a
-
-step "Final snapper verification"
-if ! sudo snapper -c root list >/dev/null 2>&1; then
-  echo "!! Snapper config still missing"
-  failures=$((failures + 1))
-else
-  echo "==> Snapper config verified"
-fi
-
-step "Final service enable retry"
-run "enable snapper-timeline.timer" sudo systemctl enable --now snapper-timeline.timer
-run "enable snapper-cleanup.timer" sudo systemctl enable --now snapper-cleanup.timer
-run "enable grub-btrfsd" sudo systemctl enable --now grub-btrfsd
-
-step "Final GRUB regeneration retry"
-run "grub-mkconfig retry" sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-step "Final snapshot retry"
-run "create fresh install snapshot" sudo snapper -c root create --description "Fresh Install Snapshot"
-
-step "Listing snapshots"
-run "snapper list" sudo snapper -c root list
-
-echo
-echo "Done."
-echo "Pacman transactions now auto-create snapshots."
-echo "GRUB menu will show bootable snapshots."
-
-if [ "$failures" -gt 0 ]; then
-  echo "Completed with $failures failed step(s)."
-  exit 1
+    fail "$FAILURES operation(s) failed. Review output above."
+    exit 1
 fi

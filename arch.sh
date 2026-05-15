@@ -7,9 +7,18 @@
 
 set -euo pipefail
 
-# ── Safety ───────────────────────────────────────────────────────────────────
-if [[ $EUID -eq 0 ]]; then
-    echo "Do not run this script as root."
+# ── Safety ──────────────────────────────────────────────────────────────────
+if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root."
+    exit 1
+fi
+
+REAL_USER="${SUDO_USER:-radwrld}"
+REAL_HOME="$(eval echo "~$REAL_USER")"
+
+# Prevent accidental root-home pollution
+if [[ "$REAL_HOME" == "/root" ]]; then
+    echo "Failed to resolve target user home directory."
     exit 1
 fi
 
@@ -19,7 +28,7 @@ HOSTNAME_VAL="$(hostname)"
 SWAP_DEVICE="/dev/sda4"
 SWAP_SIZE="8G"
 FISH_BIN="/usr/bin/fish"
-BITNET_DIR="$HOME/BitNet"
+BITNET_DIR="$REAL_HOME/BitNet"
 MODEL_DIR="$BITNET_DIR/model"
 MODEL_URL="https://huggingface.co/microsoft/BitNet/resolve/main/ggml-model-i2_s.gguf"
 MODEL_FILE="$MODEL_DIR/ggml-model-i2_s.gguf"
@@ -287,23 +296,23 @@ critical_step "Install BitNet build dependencies" \
 critical_step "Clone Microsoft BitNet repository" \
     bash -c "
         rm -rf '$BITNET_DIR'
-        git clone https://github.com/microsoft/BitNet.git '$BITNET_DIR'
+        sudo -u '$REAL_USER' git clone https://github.com/microsoft/BitNet.git '$BITNET_DIR'
         cd '$BITNET_DIR'
-        git checkout 5c19b36
+        sudo -u '$REAL_USER' git checkout 5c19b36
     "
 
 critical_step "Update git submodules" \
-    "cd $BITNET_DIR && git submodule update --init --recursive"
+    "cd '$BITNET_DIR' && sudo -u '$REAL_USER' git submodule update --init --recursive"
 
 critical_step "Configure build with CMake + Ninja" \
-    "cd $BITNET_DIR && cmake -B build -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER=clang \
+    "cd '$BITNET_DIR' && sudo -u '$REAL_USER' cmake -B build -G Ninja \
+         -DCMAKE_BUILD_TYPE=Release \
+         -DCMAKE_C_COMPILER=clang \
         -DCMAKE_CXX_COMPILER=clang++ \
         -DGGML_OPENMP=ON"
 
 critical_step "Compile BitNet" \
-    "cd $BITNET_DIR && ninja -C build"
+    "cd '$BITNET_DIR' && sudo -u '$REAL_USER' ninja -C build"
 
 # =============================================================================
 # STAGE 10 — Model Download

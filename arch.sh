@@ -8,7 +8,8 @@
 set -euo pipefail
 
 # ── Globals ──────────────────────────────────────────────────────────────────
-REAL_HOME="/home/"
+USERNAME="radwrld"
+REAL_HOME="/home/$USERNAME"
 USERNAME="radwrld"
 HOSTNAME_VAL="$(cat /etc/hostname 2>/dev/null || echo unknown-host)"
 SWAP_DEVICE="/dev/sda4"
@@ -21,6 +22,7 @@ MODEL_FILE="$MODEL_DIR/ggml-model-i2_s.gguf"
 REMOTE_INSTALLER_URL="https://raw.githubusercontent.com/radwrld/installer/main/install.sh"
 
 FAILED_STEPS=()
+REAL_USER="$USERNAME"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 io() {
@@ -212,20 +214,21 @@ run_shell "Mask zram services" \
 
 # Create Btrfs @swap subvolume
 run_shell "Create Btrfs @swap subvolume" \
-    "mount $SWAP_DEVICE /mnt 2>/dev/null || true
-     btrfs subvolume create /mnt/@swap 2>/dev/null || true
-     umount /mnt 2>/dev/null || true"
+    "mkdir -p /tmp/btrfs-swap
+     mount $SWAP_DEVICE /tmp/btrfs-swap 2>/dev/null || true
+     btrfs subvolume create /tmp/btrfs-swap/@swap 2>/dev/null || true
+     umount /tmp/btrfs-swap 2>/dev/null || true"
 
 # Mount @swap subvolume
 run_shell "Mount @swap subvolume at /swap" \
     "mkdir -p /swap
      mount -o subvol=@swap $SWAP_DEVICE /swap"
 
-# Create swapfile (Btrfs-compatible: nocow, nodatacow)
+# Create swapfile
 run_shell "Create Btrfs-compatible swapfile" \
     "truncate -s 0 /swap/swapfile
      chattr +C /swap/swapfile
-     fallocate -l $SWAP_SIZE /swap/swapfile
+     dd if=/dev/zero of=/swap/swapfile bs=1M count=8192 status=progress
      chmod 600 /swap/swapfile
      mkswap /swap/swapfile"
 
@@ -251,9 +254,9 @@ run_shell "Calculate resume_offset and inject into GRUB" \
 # mkinitcpio resume hook
 run_shell "Add resume hook to mkinitcpio.conf" \
     "if ! grep -q 'resume' /etc/mkinitcpio.conf; then
-         sed -i 's/\(HOOKS=.*\)filesystems/\1filesystems resume/' /etc/mkinitcpio.conf
+         sed -i 's/\<filesystems\>/resume filesystems/' /etc/mkinitcpio.conf
      fi"
-
+     
 run_step "Rebuild initramfs" \
     mkinitcpio -P
 
@@ -269,8 +272,7 @@ BITNET_BUILD_DEPS=(
     cmake
     ninja
     clang
-    llvm
-    libomp
+    openmp
     python
     python-pip
     git
@@ -282,23 +284,32 @@ critical_step "Install BitNet build dependencies" \
 critical_step "Clone Microsoft BitNet repository" \
     bash -c "
         rm -rf '$BITNET_DIR'
-        sudo -u '$REAL_USER' git clone https://github.com/microsoft/BitNet.git '$BITNET_DIR'
+        sudo -u '$USERNAME' git clone https://github.com/microsoft/BitNet.git '$BITNET_DIR'
         cd '$BITNET_DIR'
-        sudo -u '$REAL_USER' git checkout 5c19b36
+        sudo -u '$USERNAME' git checkout 5c19b36
     "
 
 critical_step "Update git submodules" \
-    "cd '$BITNET_DIR' && sudo -u '$REAL_USER' git submodule update --init --recursive"
+    bash -c "
+        cd '$BITNET_DIR'
+        sudo -u '$USERNAME' git submodule update --init --recursive
+    "
 
 critical_step "Configure build with CMake + Ninja" \
-    "cd '$BITNET_DIR' && sudo -u '$REAL_USER' cmake -B build -G Ninja \
-         -DCMAKE_BUILD_TYPE=Release \
-         -DCMAKE_C_COMPILER=clang \
-        -DCMAKE_CXX_COMPILER=clang++ \
-        -DGGML_OPENMP=ON"
+    bash -c "
+        cd '$BITNET_DIR'
+        sudo -u '$USERNAME' cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DGGML_OPENMP=ON
+    "
 
 critical_step "Compile BitNet" \
-    "cd '$BITNET_DIR' && sudo -u '$REAL_USER' ninja -C build"
+    bash -c "
+        cd '$BITNET_DIR'
+        sudo -u '$USERNAME' ninja -C build
+    "
 
 # =============================================================================
 # STAGE 10 — Model Download
@@ -306,10 +317,11 @@ critical_step "Compile BitNet" \
 io "Stage 10 — Model Download"
 
 run_shell "Create model directory" \
-    "mkdir -p $MODEL_DIR"
+    "mkdir -p '$MODEL_DIR'
+     chown -R '$USERNAME:$USERNAME' '$BITNET_DIR'"
 
 critical_step "Download BitNet GGUF model from HuggingFace" \
-    "wget -c -O $MODEL_FILE $MODEL_URL"
+    bash -c "sudo -u '$USERNAME' wget -c -O '$MODEL_FILE' '$MODEL_URL'"
 
 # =============================================================================
 # STAGE 11 — Inference Test
@@ -326,11 +338,13 @@ critical_step "Validate model and binary exist, then run test inference" \
          echo 'Model file not found at $MODEL_FILE'; exit 1
      fi
      $LLAMA_CLI \
-         -m $MODEL_FILE \
+         -m '$MODEL_FILE' \
          -p 'Hello, BitNet. Describe yourself in one sentence.' \
          -n 64 \
          --temp 0.0"
 
+# WARNING: Executes arbitrary remote code as root.
+# Review before executing.
 # =============================================================================
 # STAGE 12 — Remote Installer
 # =============================================================================

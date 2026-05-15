@@ -9,7 +9,7 @@ set -euo pipefail
 
 # ── Globals ──────────────────────────────────────────────────────────────────
 USERNAME="radwrld"
-HOSTNAME_VAL="$(hostname)"
+HOSTNAME_VAL="$(hostnamectl --static 2>/dev/null || cat /etc/hostname || echo unknown-host)"
 SWAP_DEVICE="/dev/sda4"
 SWAP_SIZE="8G"
 FISH_BIN="/usr/bin/fish"

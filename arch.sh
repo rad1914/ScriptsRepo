@@ -136,6 +136,40 @@ else
 fi
 
 # =============================================================================
+# STAGE 4.5 — OpenSSH Daemon Configuration
+# =============================================================================
+io "Stage 4.5 — OpenSSH Daemon Configuration"
+
+SSHD_CONFIG="/etc/ssh/sshd_config"
+
+run_shell "Ensure Port 22 is configured" \
+    "if grep -q '^#\?Port ' \"$SSHD_CONFIG\"; then
+         sed -i 's/^#\?Port .*/Port 22/' \"$SSHD_CONFIG\"
+     else
+         echo 'Port 22' >> \"$SSHD_CONFIG\"
+     fi"
+
+run_shell "Enable root login" \
+    "if grep -q '^#\?PermitRootLogin ' \"$SSHD_CONFIG\"; then
+         sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' \"$SSHD_CONFIG\"
+     else
+         echo 'PermitRootLogin yes' >> \"$SSHD_CONFIG\"
+     fi"
+
+run_shell "Ensure PasswordAuthentication is enabled" \
+    "if grep -q '^#\?PasswordAuthentication ' \"$SSHD_CONFIG\"; then
+         sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication yes/' \"$SSHD_CONFIG\"
+     else
+         echo 'PasswordAuthentication yes' >> \"$SSHD_CONFIG\"
+     fi"
+
+run_step "Enable OpenSSH service" \
+    systemctl enable sshd
+
+run_step "Restart OpenSSH service" \
+    systemctl restart sshd
+
+# =============================================================================
 # STAGE 5 — Shell Configuration (fish)
 # =============================================================================
 io "Stage 5 — Shell Configuration"

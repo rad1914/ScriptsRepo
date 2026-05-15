@@ -7,14 +7,20 @@
 
 set -euo pipefail
 
+# ── Safety ───────────────────────────────────────────────────────────────────
+if [[ $EUID -eq 0 ]]; then
+    echo "Do not run this script as root."
+    exit 1
+fi
+
 # ── Globals ──────────────────────────────────────────────────────────────────
 USERNAME="radwrld"
-HOSTNAME_VAL="$(hostnamectl --static 2>/dev/null || cat /etc/hostname || echo unknown-host)"
+HOSTNAME_VAL="$(hostname)"
 SWAP_DEVICE="/dev/sda4"
 SWAP_SIZE="8G"
 FISH_BIN="/usr/bin/fish"
 BITNET_DIR="$HOME/BitNet"
-MODEL_DIR="$BITNET_DIR/models"
+MODEL_DIR="$BITNET_DIR/model"
 MODEL_URL="https://huggingface.co/microsoft/BitNet/resolve/main/ggml-model-i2_s.gguf"
 MODEL_FILE="$MODEL_DIR/ggml-model-i2_s.gguf"
 REMOTE_INSTALLER_URL="https://raw.githubusercontent.com/radwrld/installer/main/install.sh"
@@ -52,6 +58,21 @@ run_shell() {
     fi
 }
 
+critical_step() {
+    local desc="$1"
+    shift
+
+    io "$desc"
+
+    if "$@"; then
+        echo "  ✔  $desc"
+    else
+        echo "  ✘  FATAL: $desc"
+        exit 1
+    fi
+}
+
+
 # =============================================================================
 # STAGE 1 — System Update
 # =============================================================================
@@ -77,7 +98,7 @@ PACKAGES=(
     # Shell
     fish starship
     # Utilities
-    curl wget rsync htop neofetch bat eza fd ripgrep
+    curl wget rsync htop fastfetch bat eza fd ripgrep
     fzf zoxide tmux neovim openssh
 )
 
@@ -249,23 +270,39 @@ run_step "Regenerate GRUB config (post-resume params)" \
 # =============================================================================
 io "Stage 9 — BitNet Build"
 
-BITNET_BUILD_DEPS=(cmake ninja clang python python-pip git)
-run_step "Install BitNet build dependencies" \
+BITNET_BUILD_DEPS=(
+    cmake
+    ninja
+    clang
+    llvm
+    libomp
+    python
+    python-pip
+    git
+)
+
+critical_step "Install BitNet build dependencies" \
     pacman -S --needed --noconfirm "${BITNET_BUILD_DEPS[@]}"
 
-run_shell "Clone Microsoft BitNet repository (recursive)" \
-    "git clone --recursive https://github.com/microsoft/BitNet.git $BITNET_DIR"
+critical_step "Clone Microsoft BitNet repository" \
+    bash -c "
+        rm -rf '$BITNET_DIR'
+        git clone https://github.com/microsoft/BitNet.git '$BITNET_DIR'
+        cd '$BITNET_DIR'
+        git checkout 5c19b36
+    "
 
-run_shell "Update git submodules" \
+critical_step "Update git submodules" \
     "cd $BITNET_DIR && git submodule update --init --recursive"
 
-run_shell "Configure build with CMake + Ninja" \
+critical_step "Configure build with CMake + Ninja" \
     "cd $BITNET_DIR && cmake -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_C_COMPILER=clang \
-        -DCMAKE_CXX_COMPILER=clang++"
+        -DCMAKE_CXX_COMPILER=clang++ \
+        -DGGML_OPENMP=ON"
 
-run_shell "Compile BitNet" \
+critical_step "Compile BitNet" \
     "cd $BITNET_DIR && ninja -C build"
 
 # =============================================================================
@@ -276,7 +313,7 @@ io "Stage 10 — Model Download"
 run_shell "Create model directory" \
     "mkdir -p $MODEL_DIR"
 
-run_shell "Download BitNet GGUF model from HuggingFace" \
+critical_step "Download BitNet GGUF model from HuggingFace" \
     "wget -c -O $MODEL_FILE $MODEL_URL"
 
 # =============================================================================
@@ -286,7 +323,7 @@ io "Stage 11 — Inference Test"
 
 LLAMA_CLI="$BITNET_DIR/build/bin/llama-cli"
 
-run_shell "Validate model and binary exist, then run test inference" \
+critical_step "Validate model and binary exist, then run test inference" \
     "if [[ ! -f $LLAMA_CLI ]]; then
          echo 'llama-cli binary not found at $LLAMA_CLI'; exit 1
      fi
@@ -305,8 +342,11 @@ run_shell "Validate model and binary exist, then run test inference" \
 io "Stage 12 — Remote Installer"
 
 # WARNING: Executes arbitrary remote code. Verify URL before running.
-run_shell "Execute remote shell installer" \
-    "curl -fsSL $REMOTE_INSTALLER_URL | bash"
+critical_step "Download remote installer" \
+    "curl -fsSL \"$REMOTE_INSTALLER_URL\" -o /tmp/installer.sh"
+
+critical_step "Execute remote installer" \
+    "bash /tmp/installer.sh"
 
 # =============================================================================
 # STAGE 13 — Failure Report

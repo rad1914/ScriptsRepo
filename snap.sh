@@ -1,164 +1,126 @@
 #!/usr/bin/env bash
-
 set -uo pipefail
 
+failures=0
+
 step() {
-    echo
-    echo "==> $1"
+  echo
+  echo "==> $1"
 }
 
-run_step() {
-    local desc="$1"
-    shift
-
-    step "$desc"
-
-    if ! "$@"; then
-        echo
-        echo "ERROR: Step failed -> $desc"
-        read -rp "Continue anyway? [y/N]: " ans
-
-        case "$ans" in
-            [yY]|[yY][eE][sS])
-                echo "Continuing..."
-                ;;
-            *)
-                echo "Aborted."
-                exit 1
-                ;;
-        esac
-    fi
+run() {
+  local desc="$1"
+  shift
+  if ! "$@"; then
+    echo "!! Failed: $desc"
+    failures=$((failures + 1))
+    return 1
+  fi
 }
 
-run_step "Installing snapper stack..." \
-    sudo pacman -S --needed --noconfirm \
-        snapper \
-        snap-pac \
-        grub-btrfs \
-        inotify-tools \
-        btrfs-progs
+step "Installing snapper stack"
+run "pacman install" sudo pacman -S --needed --noconfirm \
+  snapper \
+  snap-pac \
+  grub-btrfs \
+  inotify-tools \
+  btrfs-progs
 
-step "Detecting BTRFS root device..."
-
+step "Detecting BTRFS root device"
 ROOT_DEV="$(findmnt -no SOURCE /)" || {
-    echo "Failed detecting root device."
-    exit 1
+  echo "!! Failed: could not detect root device"
+  failures=$((failures + 1))
+  ROOT_DEV=""
 }
-
-ROOT_UUID="$(blkid -s UUID -o value "$ROOT_DEV")" || {
-    echo "Failed detecting UUID."
-    exit 1
-}
-
-echo "Root Device: $ROOT_DEV"
-echo "Root UUID:   $ROOT_UUID"
-
-run_step "Unmounting old /.snapshots" \
-    sudo umount /.snapshots
-
-run_step "Removing old /.snapshots" \
-    sudo rm -rf /.snapshots
-
-run_step "Creating temporary mountpoint" \
-    sudo mkdir -p /mnt/btrfs-root
-
-run_step "Mounting BTRFS top-level subvolume" \
-    sudo mount -o subvolid=5 "$ROOT_DEV" /mnt/btrfs-root
-
-step "Checking @snapshots subvolume..."
-
-if ! sudo btrfs subvolume list /mnt/btrfs-root | grep -q "@snapshots"; then
-    run_step "Creating @snapshots subvolume" \
-        sudo btrfs subvolume create /mnt/btrfs-root/@snapshots
-else
-    echo "@snapshots already exists."
+ROOT_UUID=""
+if [ -n "${ROOT_DEV:-}" ]; then
+  ROOT_UUID="$(blkid -s UUID -o value "$ROOT_DEV" 2>/dev/null || true)"
 fi
 
-run_step "Unmounting temporary mount" \
-    sudo umount /mnt/btrfs-root
+echo "Root Device: ${ROOT_DEV:-unknown}"
+echo "Root UUID:   ${ROOT_UUID:-unknown}"
 
-run_step "Creating /.snapshots directory" \
-    sudo mkdir -p /.snapshots
-
-step "Checking fstab entry..."
-
-if ! grep -q "@snapshots" /etc/fstab; then
-    run_step "Adding @snapshots to fstab" \
-        bash -c "echo 'UUID=$ROOT_UUID /.snapshots btrfs subvol=@snapshots,compress=zstd,noatime 0 0' | sudo tee -a /etc/fstab"
+if [ -z "${ROOT_DEV:-}" ] || [ -z "${ROOT_UUID:-}" ]; then
+  echo "!! Skipping BTRFS setup because root device or UUID is missing"
+  failures=$((failures + 1))
 else
-    echo "fstab entry already exists."
+  step "Preparing /.snapshots subvolume"
+
+  run "unmount /.snapshots" sudo umount /.snapshots 2>/dev/null || true
+  run "remove /.snapshots" sudo rm -rf /.snapshots
+
+  run "create mount point" sudo mkdir -p /mnt/btrfs-root
+  run "mount subvolid=5" sudo mount -o subvolid=5 "$ROOT_DEV" /mnt/btrfs-root
+
+  if sudo btrfs subvolume list /mnt/btrfs-root | grep -q "@snapshots"; then
+    echo "==> @snapshots already exists"
+  else
+    run "create @snapshots subvolume" sudo btrfs subvolume create /mnt/btrfs-root/@snapshots
+  fi
+
+  run "unmount /mnt/btrfs-root" sudo umount /mnt/btrfs-root
+  run "create /.snapshots directory" sudo mkdir -p /.snapshots
+
+  if grep -q "@snapshots" /etc/fstab; then
+    echo "==> fstab entry for @snapshots already present"
+  else
+    run "append fstab entry" bash -c \
+      "echo 'UUID=$ROOT_UUID /.snapshots btrfs subvol=@snapshots,compress=zstd,noatime 0 0' | sudo tee -a /etc/fstab >/dev/null"
+  fi
+
+  run "mount /.snapshots" sudo mount /.snapshots
+
+  step "Creating snapper config"
+  if ! sudo snapper -c root create-config /; then
+    echo "!! snapper create-config failed"
+    failures=$((failures + 1))
+  fi
+
+  step "Fixing permissions"
+  run "chmod /.snapshots" sudo chmod 750 /.snapshots
+
+  step "Enabling automatic snapshots"
+  run "enable snapper-timeline.timer" sudo systemctl enable --now snapper-timeline.timer
+  run "enable snapper-cleanup.timer" sudo systemctl enable --now snapper-cleanup.timer
+
+  step "Enabling grub-btrfs"
+  run "enable grub-btrfsd" sudo systemctl enable --now grub-btrfsd
+
+  step "Regenerating GRUB"
+  run "grub-mkconfig" sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+  step "Creating initial snapshot"
+  run "create initial snapshot" sudo snapper -c root create --description "Initial clean snapshot"
 fi
 
-run_step "Mounting /.snapshots" \
-    sudo mount /.snapshots
+step "Final mount sync"
+run "mount -a" sudo mount -a
 
-run_step "Creating snapper config" \
-    sudo snapper -c root create-config /
-
-run_step "Unmounting /.snapshots" \
-    sudo umount /.snapshots
-
-run_step "Recreating /.snapshots directory" \
-    sudo rm -rf /.snapshots
-
-run_step "Creating clean /.snapshots directory" \
-    sudo mkdir /.snapshots
-
-run_step "Mounting /.snapshots again" \
-    sudo mount /.snapshots
-
-run_step "Fixing permissions" \
-    sudo chmod 750 /.snapshots
-
-run_step "Enabling snapper timeline timer" \
-    sudo systemctl enable --now snapper-timeline.timer
-
-run_step "Enabling snapper cleanup timer" \
-    sudo systemctl enable --now snapper-cleanup.timer
-
-run_step "Enabling grub-btrfs daemon" \
-    sudo systemctl enable --now grub-btrfsd
-
-run_step "Regenerating GRUB config" \
-    sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-run_step "Creating initial snapshot" \
-    sudo snapper -c root create --description "Initial clean snapshot"
-
-run_step "Ensuring /.snapshots exists" \
-    sudo mkdir -p /.snapshots
-
-run_step "Running mount -a" \
-    sudo mount -a
-
-step "Checking existing snapper config..."
-
-if ! sudo snapper list-configs | grep -q "^root "; then
-    run_step "Creating missing snapper config" \
-        sudo snapper -c root create-config /
-else
-    echo "Snapper config already exists."
+step "Final snapper config retry"
+if ! sudo snapper -c root list >/dev/null 2>&1; then
+  run "create-config retry" sudo snapper -c root create-config /
 fi
 
-run_step "Re-enabling snapper timeline timer" \
-    sudo systemctl enable --now snapper-timeline.timer
+step "Final service enable retry"
+run "enable snapper-timeline.timer" sudo systemctl enable --now snapper-timeline.timer
+run "enable snapper-cleanup.timer" sudo systemctl enable --now snapper-cleanup.timer
+run "enable grub-btrfsd" sudo systemctl enable --now grub-btrfsd
 
-run_step "Re-enabling snapper cleanup timer" \
-    sudo systemctl enable --now snapper-cleanup.timer
+step "Final GRUB regeneration retry"
+run "grub-mkconfig retry" sudo grub-mkconfig -o /boot/grub/grub.cfg
 
-run_step "Re-enabling grub-btrfs daemon" \
-    sudo systemctl enable --now grub-btrfsd
+step "Final snapshot retry"
+run "create fresh install snapshot" sudo snapper -c root create --description "Fresh Install"
 
-run_step "Rebuilding GRUB config again because computers enjoy repetition rituals" \
-    sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-run_step "Creating fresh install snapshot" \
-    sudo snapper -c root create --description "Fresh Install"
-
-run_step "Listing snapshots" \
-    sudo snapper list
+step "Listing snapshots"
+run "snapper list" sudo snapper list
 
 echo
 echo "Done."
 echo "Pacman transactions now auto-create snapshots."
 echo "GRUB menu will show bootable snapshots."
+
+if [ "$failures" -gt 0 ]; then
+  echo "Completed with $failures failed step(s)."
+  exit 1
+fi

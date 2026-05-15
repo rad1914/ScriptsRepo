@@ -282,6 +282,12 @@ critical_step "Clone llama.cpp repository" \
 critical_step "Configure llama.cpp build" \
     bash -c "
         cd '$LLAMA_DIR'
+
+        if [[ -f build/bin/llama-cli || -f build/bin/main ]]; then
+            echo 'llama.cpp already compiled — skipping configure'
+            exit 0
+        fi
+
         sudo -u '$USERNAME' cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_OPENMP=ON
@@ -290,6 +296,12 @@ critical_step "Configure llama.cpp build" \
 critical_step "Compile llama.cpp" \
     bash -c "
         cd '$LLAMA_DIR'
+
+        if [[ -f build/bin/llama-cli || -f build/bin/main ]]; then
+            echo 'llama.cpp already compiled — skipping build'
+            exit 0
+        fi
+
         sudo -u '$USERNAME' ninja -C build
     "
 
@@ -310,20 +322,40 @@ critical_step "Download BitNet GGUF model from HuggingFace" \
 # =============================================================================
 io "Stage 11 — Inference Test"
 
-LLAMA_CLI="$LLAMA_DIR/build/bin/llama-cli"
+LLAMA_CLI=""
+
+for candidate in \
+    "$LLAMA_DIR/build/bin/llama-cli" \
+    "$LLAMA_DIR/build/bin/main" \
+    "$LLAMA_DIR/build/bin/Release/llama-cli" \
+    "$LLAMA_DIR/build/bin/Release/main"
+do
+    if [[ -x "$candidate" ]]; then
+        LLAMA_CLI="$candidate"
+        break
+    fi
+done
 
 critical_step "Validate model and binary exist, then run test inference" \
-    "if [[ ! -f $LLAMA_CLI ]]; then
-         echo 'llama-cli binary not found at $LLAMA_CLI'; exit 1
-     fi
-     if [[ ! -f $MODEL_FILE ]]; then
-         echo 'Model file not found at $MODEL_FILE'; exit 1
-     fi
-     $LLAMA_CLI \
-         -m '$MODEL_FILE' \
-         -p 'Hello, BitNet. Describe yourself in one sentence.' \
-         -n 64 \
-         --temp 0.0"
+    bash -c "
+        if [[ -z '$LLAMA_CLI' ]]; then
+            echo 'No llama executable found'
+            exit 1
+        fi
+
+        if [[ ! -f '$MODEL_FILE' ]]; then
+            echo 'Model file not found at $MODEL_FILE'
+            exit 1
+        fi
+
+        echo 'Using binary: $LLAMA_CLI'
+
+        '$LLAMA_CLI' \
+            -m '$MODEL_FILE' \
+            -p 'Hello, BitNet. Describe yourself in one sentence.' \
+            -n 64 \
+            --temp 0.0
+    "
 
 # WARNING: Executes arbitrary remote code as root.
 # Review before executing.

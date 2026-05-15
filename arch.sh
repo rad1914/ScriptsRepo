@@ -7,21 +7,6 @@
 
 set -euo pipefail
 
-# ── Safety ──────────────────────────────────────────────────────────────────
-if [[ $EUID -ne 0 ]]; then
-    echo "This script must be run as root."
-    exit 1
-fi
-
-REAL_USER="${SUDO_USER:-radwrld}"
-REAL_HOME="$(eval echo "~$REAL_USER")"
-
-# Prevent accidental root-home pollution
-if [[ "$REAL_HOME" == "/root" ]]; then
-    echo "Failed to resolve target user home directory."
-    exit 1
-fi
-
 # ── Globals ──────────────────────────────────────────────────────────────────
 USERNAME="radwrld"
 HOSTNAME_VAL="$(hostname)"

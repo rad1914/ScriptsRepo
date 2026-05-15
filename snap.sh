@@ -28,7 +28,7 @@ run "pacman install" sudo pacman -S --needed --noconfirm \
   btrfs-progs
 
 step "Detecting BTRFS root device"
-ROOT_DEV="$(findmnt -no SOURCE /)" || {
+ROOT_DEV="$(findmnt -no SOURCE / | sed 's/\[.*//')" || {
   echo "!! Failed: could not detect root device"
   failures=$((failures + 1))
   ROOT_DEV=""
@@ -47,21 +47,24 @@ if [ -z "${ROOT_DEV:-}" ] || [ -z "${ROOT_UUID:-}" ]; then
 else
   step "Preparing /.snapshots subvolume"
 
-  run "unmount /.snapshots" sudo umount /.snapshots || true
-  run "remove /.snapshots" sudo rm -rf /.snapshots
+  sudo umount /.snapshots 2>/dev/null || true
+  sudo rm -rf /.snapshots
+
+  if sudo btrfs subvolume list / | grep -q 'path .snapshots$'; then
+    run "delete existing .snapshots subvolume" \
+      sudo btrfs subvolume delete /.snapshots
+  fi
 
   step "Creating snapper config"
-  if ! sudo snapper -c root create-config /; then
-    echo "!! snapper create-config failed"
-    failures=$((failures + 1))
-  fi
+  run "snapper create-config" \
+    sudo snapper -c root create-config /
 
   step "Preparing /.snapshots mount"
 
-  if sudo btrfs subvolume list / | grep -q '\.snapshots'; then
+  if sudo btrfs subvolume list / | grep -q 'path .snapshots$'; then
     echo "==> .snapshots subvolume exists"
   else
-    echo "!! .snapshots subvolume missing"
+    echo "!! .snapshots subvolume was not created"
     failures=$((failures + 1))
   fi
 
@@ -84,6 +87,9 @@ else
   run "enable snapper-cleanup.timer" sudo systemctl enable --now snapper-cleanup.timer
   run "enable grub-btrfsd" sudo systemctl enable --now grub-btrfsd
 
+  step "Ensuring GRUB directories"
+  run "mkdir /boot/grub" sudo mkdir -p /boot/grub
+
   step "Regenerating GRUB"
   run "grub-mkconfig" sudo grub-mkconfig -o /boot/grub/grub.cfg
 
@@ -94,9 +100,12 @@ fi
 step "Final mount sync"
 run "mount -a" sudo mount -a
 
-step "Final snapper config retry"
+step "Final snapper verification"
 if ! sudo snapper -c root list >/dev/null 2>&1; then
-  run "create-config retry" sudo snapper -c root create-config /
+  echo "!! Snapper config still missing"
+  failures=$((failures + 1))
+else
+  echo "==> Snapper config verified"
 fi
 
 step "Final service enable retry"
@@ -108,10 +117,10 @@ step "Final GRUB regeneration retry"
 run "grub-mkconfig retry" sudo grub-mkconfig -o /boot/grub/grub.cfg
 
 step "Final snapshot retry"
-run "create fresh install snapshot" sudo snapper -c root create --description "Fresh Install"
+run "create fresh install snapshot" sudo snapper -c root create --description "Fresh Install Snapshot"
 
 step "Listing snapshots"
-run "snapper list" sudo snapper list
+run "snapper list" sudo snapper -c root list
 
 echo
 echo "Done."

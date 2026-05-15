@@ -24,6 +24,7 @@ run "pacman install" sudo pacman -S --needed --noconfirm \
   snap-pac \
   grub-btrfs \
   inotify-tools \
+  less \
   btrfs-progs
 
 step "Detecting BTRFS root device"
@@ -46,29 +47,8 @@ if [ -z "${ROOT_DEV:-}" ] || [ -z "${ROOT_UUID:-}" ]; then
 else
   step "Preparing /.snapshots subvolume"
 
-  run "unmount /.snapshots" sudo umount /.snapshots 2>/dev/null || true
+  run "unmount /.snapshots" sudo umount /.snapshots || true
   run "remove /.snapshots" sudo rm -rf /.snapshots
-
-  run "create mount point" sudo mkdir -p /mnt/btrfs-root
-  run "mount subvolid=5" sudo mount -o subvolid=5 "$ROOT_DEV" /mnt/btrfs-root
-
-  if sudo btrfs subvolume list /mnt/btrfs-root | grep -q "@snapshots"; then
-    echo "==> @snapshots already exists"
-  else
-    run "create @snapshots subvolume" sudo btrfs subvolume create /mnt/btrfs-root/@snapshots
-  fi
-
-  run "unmount /mnt/btrfs-root" sudo umount /mnt/btrfs-root
-  run "create /.snapshots directory" sudo mkdir -p /.snapshots
-
-  if grep -q "@snapshots" /etc/fstab; then
-    echo "==> fstab entry for @snapshots already present"
-  else
-    run "append fstab entry" bash -c \
-      "echo 'UUID=$ROOT_UUID /.snapshots btrfs subvol=@snapshots,compress=zstd,noatime 0 0' | sudo tee -a /etc/fstab >/dev/null"
-  fi
-
-  run "mount /.snapshots" sudo mount /.snapshots
 
   step "Creating snapper config"
   if ! sudo snapper -c root create-config /; then
@@ -76,14 +56,32 @@ else
     failures=$((failures + 1))
   fi
 
+  step "Preparing /.snapshots mount"
+
+  if sudo btrfs subvolume list / | grep -q '\.snapshots'; then
+    echo "==> .snapshots subvolume exists"
+  else
+    echo "!! .snapshots subvolume missing"
+    failures=$((failures + 1))
+  fi
+
+  run "create /.snapshots directory" sudo mkdir -p /.snapshots
+
+  if grep -q '\.snapshots' /etc/fstab; then
+    echo "==> fstab entry for .snapshots already present"
+  else
+    run "append fstab entry" bash -c \
+      "echo 'UUID=$ROOT_UUID /.snapshots btrfs subvol=.snapshots,compress=zstd,noatime 0 0' | sudo tee -a /etc/fstab >/dev/null"
+  fi
+
+  run "mount /.snapshots" sudo mount /.snapshots
+
   step "Fixing permissions"
   run "chmod /.snapshots" sudo chmod 750 /.snapshots
 
   step "Enabling automatic snapshots"
   run "enable snapper-timeline.timer" sudo systemctl enable --now snapper-timeline.timer
   run "enable snapper-cleanup.timer" sudo systemctl enable --now snapper-cleanup.timer
-
-  step "Enabling grub-btrfs"
   run "enable grub-btrfsd" sudo systemctl enable --now grub-btrfsd
 
   step "Regenerating GRUB"

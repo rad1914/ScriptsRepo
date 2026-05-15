@@ -1,7 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "==> Installing snapper stack..."
+log() {
+  printf '\n==> %s\n' "$1"
+}
+
+require_root_mount() {
+  local fs
+  fs="$(findmnt -no FSTYPE /)"
+
+  if [[ "$fs" != "btrfs" ]]; then
+    echo "ERROR: Root filesystem is not BTRFS."
+    exit 1
+  fi
+}
+
+log "Validating BTRFS root..."
+require_root_mount
+
+log "Installing snapshot stack..."
 sudo pacman -S --needed --noconfirm \
   snapper \
   snap-pac \
@@ -9,65 +26,98 @@ sudo pacman -S --needed --noconfirm \
   inotify-tools \
   btrfs-progs
 
-echo "==> Detecting BTRFS root device..."
+log "Detecting root device..."
 ROOT_DEV="$(findmnt -no SOURCE /)"
 ROOT_UUID="$(blkid -s UUID -o value "$ROOT_DEV")"
 
 echo "Root Device: $ROOT_DEV"
 echo "Root UUID:   $ROOT_UUID"
 
-echo "==> Preparing /.snapshots subvolume..."
+TMP_MOUNT="/mnt/btrfs-root"
 
-sudo umount /.snapshots 2>/dev/null || true
-sudo rm -rf /.snapshots
+log "Preparing temporary mount..."
+sudo mkdir -p "$TMP_MOUNT"
 
-sudo mkdir -p /mnt/btrfs-root
-sudo mount -o subvolid=5 "$ROOT_DEV" /mnt/btrfs-root
-
-if ! sudo btrfs subvolume list /mnt/btrfs-root | grep -q "@snapshots"; then
-  sudo btrfs subvolume create /mnt/btrfs-root/@snapshots
+if mountpoint -q "$TMP_MOUNT"; then
+  sudo umount "$TMP_MOUNT"
 fi
 
-sudo umount /mnt/btrfs-root
+log "Mounting top-level BTRFS subvolume..."
+sudo mount -o subvolid=5 "$ROOT_DEV" "$TMP_MOUNT"
 
+cleanup() {
+  sudo umount "$TMP_MOUNT" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+log "Creating @snapshots subvolume if missing..."
+if ! sudo btrfs subvolume list "$TMP_MOUNT" | grep -q 'path @snapshots$'; then
+  sudo btrfs subvolume create "$TMP_MOUNT/@snapshots"
+else
+  echo "@snapshots already exists."
+fi
+
+log "Preparing /.snapshots mountpoint..."
+
+if mountpoint -q /.snapshots; then
+  sudo umount /.snapshots
+fi
+
+sudo rm -rf /.snapshots
 sudo mkdir -p /.snapshots
 
-if ! grep -q "@snapshots" /etc/fstab; then
-  echo "UUID=$ROOT_UUID /.snapshots btrfs subvol=@snapshots,compress=zstd,noatime 0 0" \
-    | sudo tee -a /etc/fstab
+log "Adding @snapshots to fstab if missing..."
+
+FSTAB_LINE="UUID=$ROOT_UUID /.snapshots btrfs subvol=@snapshots,compress=zstd,noatime 0 0"
+
+if ! grep -q 'subvol=@snapshots' /etc/fstab; then
+  echo "$FSTAB_LINE" | sudo tee -a /etc/fstab >/dev/null
+else
+  echo "fstab entry already exists."
 fi
 
+log "Mounting /.snapshots..."
 sudo mount /.snapshots
 
-echo "==> Creating snapper config..."
+log "Removing old snapper config if present..."
+if sudo snapper list-configs | awk '{print $1}' | grep -qx root; then
+  sudo snapper -c root delete-config || true
+fi
 
+log "Creating snapper config..."
 sudo snapper -c root create-config /
+
+log "Re-mounting dedicated @snapshots subvolume..."
 
 sudo umount /.snapshots
 
 sudo rm -rf /.snapshots
-
-sudo mkdir /.snapshots
+sudo mkdir -p /.snapshots
 
 sudo mount /.snapshots
 
-echo "==> Fixing permissions..."
+log "Fixing permissions..."
 sudo chmod 750 /.snapshots
 
-echo "==> Enabling automatic snapshots..."
+log "Enabling snapper timers..."
 sudo systemctl enable --now snapper-timeline.timer
 sudo systemctl enable --now snapper-cleanup.timer
 
-echo "==> Enabling grub-btrfs..."
+log "Enabling grub-btrfs daemon..."
 sudo systemctl enable --now grub-btrfsd
 
-echo "==> Regenerating GRUB..."
+log "Regenerating GRUB menu..."
 sudo grub-mkconfig -o /boot/grub/grub.cfg
 
-echo "==> Creating initial snapshot..."
-sudo snapper -c root create --description "Initial clean snapshot"
+log "Creating initial snapshot..."
+sudo snapper -c root create \
+  --description "Initial clean snapshot"
+
+log "Installed snapshots:"
+sudo snapper list
 
 echo
 echo "Done."
 echo "Pacman transactions now auto-create snapshots."
-echo "GRUB menu will show bootable snapshots."
+echo "GRUB can boot snapshots."
+echo "Rollback support enabled."

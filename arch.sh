@@ -16,7 +16,7 @@ SWAP_SIZE="8G"
 FISH_BIN="/usr/bin/fish"
 BITNET_DIR="$REAL_HOME/BitNet"
 MODEL_DIR="$BITNET_DIR/model"
-MODEL_URL="https://huggingface.co/microsoft/BitNet/resolve/main/ggml-model-i2_s.gguf"
+MODEL_URL="https://huggingface.co/microsoft/bitnet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf"
 MODEL_FILE="$MODEL_DIR/ggml-model-i2_s.gguf"
 REMOTE_INSTALLER_URL="https://raw.githubusercontent.com/radwrld/installer/main/install.sh"
 

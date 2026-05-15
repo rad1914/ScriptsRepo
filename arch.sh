@@ -1,340 +1,327 @@
 #!/usr/bin/env bash
-set -uo pipefail
+# =============================================================================
+# Arch Linux Bootstrap + Hibernate + BitNet Setup
+# Target user : radwrld
+# Filesystem  : Btrfs  |  Bootloader: GRUB  |  DE: Hyprland + SDDM
+# =============================================================================
+
+set -euo pipefail
+
+# ── Globals ──────────────────────────────────────────────────────────────────
+USERNAME="radwrld"
+HOSTNAME_VAL="$(hostname)"
+SWAP_DEVICE="/dev/sda4"
+SWAP_SIZE="8G"
+FISH_BIN="/usr/bin/fish"
+BITNET_DIR="$HOME/BitNet"
+MODEL_DIR="$BITNET_DIR/models"
+MODEL_URL="https://huggingface.co/microsoft/BitNet/resolve/main/ggml-model-i2_s.gguf"
+MODEL_FILE="$MODEL_DIR/ggml-model-i2_s.gguf"
+REMOTE_INSTALLER_URL="https://raw.githubusercontent.com/radwrld/installer/main/install.sh"
 
 FAILED_STEPS=()
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+io() {
+    echo ""
+    echo "  ▶  $*"
+    echo ""
+}
+
 run_step() {
-  local desc="$1"
-  shift
-
-  echo
-  echo "==> $desc"
-
-  if "$@"; then
-    echo "[OK] $desc"
-  else
-    echo "[FAILED] $desc"
-    FAILED_STEPS+=("$desc")
-  fi
+    local desc="$1"
+    shift
+    io "$desc"
+    if "$@"; then
+        echo "  ✔  $desc"
+    else
+        echo "  ✘  FAILED: $desc"
+        FAILED_STEPS+=("$desc")
+    fi
 }
 
 run_shell() {
-  local desc="$1"
-  local cmd="$2"
-
-  echo
-  echo "==> $desc"
-
-  if bash -c "$cmd"; then
-    echo "[OK] $desc"
-  else
-    echo "[FAILED] $desc"
-    FAILED_STEPS+=("$desc")
-  fi
+    local desc="$1"
+    local cmd="$2"
+    io "$desc"
+    if bash -c "$cmd"; then
+        echo "  ✔  $desc"
+    else
+        echo "  ✘  FAILED: $desc"
+        FAILED_STEPS+=("$desc")
+    fi
 }
 
-io() {
-  printf '\n==> %s\n' "$1"
-}
+# =============================================================================
+# STAGE 1 — System Update
+# =============================================================================
+io "Stage 1 — System Update"
 
-TMP="${TMP:-/tmp/bootstrap-$USER}"
-mkdir -p "$TMP"
+run_step "Update pacman repositories and packages" \
+    pacman -Syu --noconfirm
 
-run_step \
-  "Updating packages" \
-  sudo pacman -Syu --noconfirm
+# =============================================================================
+# STAGE 2 — Dependency Installation
+# =============================================================================
+io "Stage 2 — Dependency Installation"
 
-run_step \
-  "Installing dependencies" \
-  sudo pacman -S --noconfirm --needed \
-  fish \
-  jdk17-openjdk \
-  which \
-  openssh \
-  git \
-  curl \
-  wget \
-  unzip \
-  nodejs \
-  htop \
-  thunar \
-  firefox \
-  android-apktool \
-  android-tools \
-  base \
-  clang \
-  cmake \
-  direnv \
-  distrobox \
-  github-cli \
-  grub \
-  jq \
-  nano \
-  nvm \
-  pm2 \
-  python-virtualenv \
-  python \
-  smali \
-  tailscale \
-  tmux \
-  tor \
-  tree \
-  uv \
-  yarn \
-  yt-dlp \
-  zip
+PACKAGES=(
+    # Desktop / Compositor
+    hyprland waybar wofi sddm
+    # Development
+    base-devel git cmake ninja clang python python-pip
+    # Networking
+    networkmanager nm-connection-editor
+    # Android
+    android-tools
+    # Shell
+    fish starship
+    # Utilities
+    curl wget rsync htop neofetch bat eza fd ripgrep
+    fzf zoxide tmux neovim openssh
+)
 
-if ! command -v yay >/dev/null 2>&1; then
-  io "Installing yay..."
+run_step "Install all packages" \
+    pacman -S --needed --noconfirm "${PACKAGES[@]}"
 
-  run_step \
-    "Installing yay dependencies" \
-    sudo pacman -S --noconfirm --needed base-devel git
+# =============================================================================
+# STAGE 3 — AUR Helper (yay)
+# =============================================================================
+io "Stage 3 — AUR Helper Setup"
 
-  cd "$TMP"
+if ! command -v yay &>/dev/null; then
+    run_step "Install base-devel and git (yay prereqs)" \
+        pacman -S --needed --noconfirm base-devel git
 
-  rm -rf yay
+    run_shell "Clone yay AUR repository" \
+        "git clone https://aur.archlinux.org/yay.git /tmp/yay"
 
-  run_step \
-    "Cloning yay" \
-    git clone https://aur.archlinux.org/yay.git
-
-  if [ ! -d yay ]; then
-    echo "[SKIPPED] Building yay because clone failed"
-  else
-    cd yay
-
-    run_step \
-      "Building yay" \
-      makepkg -si --noconfirm
-  fi
+    run_shell "Build and install yay" \
+        "cd /tmp/yay && makepkg -si --noconfirm"
+else
+    io "yay already installed — skipping"
 fi
 
-mkdir -p ~/.ssh
+# =============================================================================
+# STAGE 4 — SSH Configuration
+# =============================================================================
+io "Stage 4 — SSH Configuration"
 
-if [ ! -f ~/.ssh/id_ed25519 ]; then
-  run_step \
-    "Generating SSH key" \
-    ssh-keygen \
-    -t ed25519 \
-    -N "" \
-    -f ~/.ssh/id_ed25519 \
-    -C "$(whoami)@$(hostname)"
+run_shell "Create ~/.ssh directory" \
+    "mkdir -p ~/.ssh && chmod 700 ~/.ssh"
+
+KEY_PATH="$HOME/.ssh/id_ed25519"
+if [[ ! -f "$KEY_PATH" ]]; then
+    run_step "Generate ed25519 SSH key" \
+        ssh-keygen -t ed25519 -C "${USERNAME}@${HOSTNAME_VAL}" -f "$KEY_PATH" -N ""
+else
+    io "SSH key already exists at $KEY_PATH — skipping"
 fi
 
-io "Changing shell to fish..."
-if command -v fish >/dev/null 2>&1; then
-  run_step \
-    "Changing shell to fish" \
-    chsh -s "$(command -v fish)"
+# =============================================================================
+# STAGE 5 — Shell Configuration (fish)
+# =============================================================================
+io "Stage 5 — Shell Configuration"
+
+if [[ -x "$FISH_BIN" ]]; then
+    run_shell "Set fish as default login shell" \
+        "chsh -s $FISH_BIN $USERNAME"
+else
+    FAILED_STEPS+=("Set fish as default shell (fish binary not found)")
+    echo "  ✘  fish not found at $FISH_BIN"
 fi
 
-run_step \
-  "Creating SDDM config directories" \
-  sudo mkdir -p /etc/sddm.conf.d
+# =============================================================================
+# STAGE 6 — SDDM Autologin
+# =============================================================================
+io "Stage 6 — SDDM Autologin"
 
-run_shell \
-  "Configuring autologin" \
-  'sudo tee /etc/sddm.conf.d/autologin.conf >/dev/null <<EOF
+run_shell "Create SDDM config directory" \
+    "mkdir -p /etc/sddm.conf.d"
+
+run_shell "Write autologin.conf" \
+    "cat > /etc/sddm.conf.d/autologin.conf <<EOF
 [Autologin]
-User=radwrld
-Session=hyprland.desktop
-EOF
-'
+User=$USERNAME
+Session=hyprland
+EOF"
 
-run_step \
-  "Configuring GRUB timeout" \
-  sudo sed -i \
-  -e 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=3/' \
-  -e 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=hidden/' \
-  /etc/default/grub
+run_step "Enable and start SDDM" \
+    systemctl enable sddm
 
-if ! grep -q '^GRUB_TIMEOUT=' /etc/default/grub; then
-  echo 'GRUB_TIMEOUT=3' | sudo tee -a /etc/default/grub >/dev/null
-fi
+# =============================================================================
+# STAGE 7 — GRUB Configuration
+# =============================================================================
+io "Stage 7 — GRUB Configuration"
 
-if ! grep -q '^GRUB_TIMEOUT_STYLE=' /etc/default/grub; then
-  echo 'GRUB_TIMEOUT_STYLE=hidden' | sudo tee -a /etc/default/grub >/dev/null
-fi
+GRUB_CFG="/etc/default/grub"
 
-run_step \
-  "Generating GRUB config" \
-  sudo grub-mkconfig -o /boot/grub/grub.cfg
+run_shell "Set GRUB_TIMEOUT=0" \
+    "sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/' $GRUB_CFG"
 
-SWAPSIZE="9G"
+run_shell "Set GRUB_TIMEOUT_STYLE=hidden" \
+    "sed -i 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=hidden/' $GRUB_CFG"
 
-io "Disabling zram if present..."
-run_shell \
-  "Disabling zram service" \
-  'sudo systemctl disable --now systemd-zram-setup@zram0.service 2>/dev/null || true'
+# Append if keys are absent
+run_shell "Ensure GRUB_TIMEOUT is present" \
+    "grep -q '^GRUB_TIMEOUT=' $GRUB_CFG || echo 'GRUB_TIMEOUT=0' >> $GRUB_CFG"
 
-run_shell \
-  "Disabling zram swap" \
-  'sudo swapoff /dev/zram0 2>/dev/null || true'
+run_shell "Ensure GRUB_TIMEOUT_STYLE is present" \
+    "grep -q '^GRUB_TIMEOUT_STYLE=' $GRUB_CFG || echo 'GRUB_TIMEOUT_STYLE=hidden' >> $GRUB_CFG"
 
-run_shell \
-  "Creating swap subvolume" \
-  'sudo btrfs subvolume create /@swap || true'
+run_step "Regenerate grub.cfg" \
+    grub-mkconfig -o /boot/grub/grub.cfg
 
-run_step \
-  "Creating /swap mountpoint" \
-  sudo mkdir -p /swap
+# =============================================================================
+# STAGE 8 — Hibernate + Btrfs Swap Setup
+# =============================================================================
+io "Stage 8 — Hibernate + Btrfs Swap Setup"
 
-run_step \
-  "Mounting swap subvolume" \
-  sudo mount -o subvol=@swap /dev/sda4 /swap
+# Prompt user to confirm/override device
+read -rp "  Enter Btrfs swap partition [default: $SWAP_DEVICE]: " USER_DEVICE
+SWAP_DEVICE="${USER_DEVICE:-$SWAP_DEVICE}"
+io "Using device: $SWAP_DEVICE"
 
-run_step \
-  "Creating Btrfs-compatible swapfile" \
-  sudo btrfs filesystem mkswapfile \
-  --size "$SWAPSIZE" \
-  --uuid clear \
-  /swap/swapfile
+read -rp "  Enter swap size [default: $SWAP_SIZE]: " USER_SWAP_SIZE
+SWAP_SIZE="${USER_SWAP_SIZE:-$SWAP_SIZE}"
+io "Swap size: $SWAP_SIZE"
 
-if [ -f /swap/swapfile ]; then
-  run_step \
-    "Enabling swap" \
-    sudo swapon /swap/swapfile
+# Disable zram
+run_shell "Disable zram-generator service" \
+    "systemctl stop systemd-zram-setup@zram0.service 2>/dev/null || true"
+run_shell "Disable zram swap" \
+    "swapoff /dev/zram0 2>/dev/null || true"
+run_shell "Mask zram services" \
+    "systemctl mask systemd-zram-setup@zram0.service 2>/dev/null || true"
+
+# Create Btrfs @swap subvolume
+run_shell "Create Btrfs @swap subvolume" \
+    "mount $SWAP_DEVICE /mnt 2>/dev/null || true
+     btrfs subvolume create /mnt/@swap 2>/dev/null || true
+     umount /mnt 2>/dev/null || true"
+
+# Mount @swap subvolume
+run_shell "Mount @swap subvolume at /swap" \
+    "mkdir -p /swap
+     mount -o subvol=@swap $SWAP_DEVICE /swap"
+
+# Create swapfile (Btrfs-compatible: nocow, nodatacow)
+run_shell "Create Btrfs-compatible swapfile" \
+    "truncate -s 0 /swap/swapfile
+     chattr +C /swap/swapfile
+     fallocate -l $SWAP_SIZE /swap/swapfile
+     chmod 600 /swap/swapfile
+     mkswap /swap/swapfile"
+
+# Enable swap
+run_shell "Enable swapfile" \
+    "swapon /swap/swapfile"
+
+# fstab entries
+run_shell "Append swap mount to /etc/fstab" \
+    "SWAP_UUID=\$(blkid -s UUID -o value $SWAP_DEVICE)
+     grep -q '/swap' /etc/fstab || echo \"UUID=\$SWAP_UUID /swap btrfs subvol=@swap,defaults,noatime 0 0\" >> /etc/fstab
+     grep -q '/swap/swapfile' /etc/fstab || echo '/swap/swapfile none swap defaults 0 0' >> /etc/fstab"
+
+# Calculate resume offset (Btrfs physical offset)
+run_shell "Calculate resume_offset and inject into GRUB" \
+    "SWAP_UUID=\$(blkid -s UUID -o value $SWAP_DEVICE)
+     RESUME_OFFSET=\$(btrfs inspect-internal map-swapfile -r /swap/swapfile)
+     RESUME_PARAMS=\"resume=UUID=\$SWAP_UUID resume_offset=\$RESUME_OFFSET\"
+     if ! grep -q 'resume=' $GRUB_CFG; then
+         sed -i \"s|^GRUB_CMDLINE_LINUX_DEFAULT=\\\"|GRUB_CMDLINE_LINUX_DEFAULT=\\\"\$RESUME_PARAMS |\" $GRUB_CFG
+     fi"
+
+# mkinitcpio resume hook
+run_shell "Add resume hook to mkinitcpio.conf" \
+    "if ! grep -q 'resume' /etc/mkinitcpio.conf; then
+         sed -i 's/\(HOOKS=.*\)filesystems/\1filesystems resume/' /etc/mkinitcpio.conf
+     fi"
+
+run_step "Rebuild initramfs" \
+    mkinitcpio -P
+
+run_step "Regenerate GRUB config (post-resume params)" \
+    grub-mkconfig -o /boot/grub/grub.cfg
+
+# =============================================================================
+# STAGE 9 — BitNet Build
+# =============================================================================
+io "Stage 9 — BitNet Build"
+
+BITNET_BUILD_DEPS=(cmake ninja clang python python-pip git)
+run_step "Install BitNet build dependencies" \
+    pacman -S --needed --noconfirm "${BITNET_BUILD_DEPS[@]}"
+
+run_shell "Clone Microsoft BitNet repository (recursive)" \
+    "git clone --recursive https://github.com/microsoft/BitNet.git $BITNET_DIR"
+
+run_shell "Update git submodules" \
+    "cd $BITNET_DIR && git submodule update --init --recursive"
+
+run_shell "Configure build with CMake + Ninja" \
+    "cd $BITNET_DIR && cmake -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++"
+
+run_shell "Compile BitNet" \
+    "cd $BITNET_DIR && ninja -C build"
+
+# =============================================================================
+# STAGE 10 — Model Download
+# =============================================================================
+io "Stage 10 — Model Download"
+
+run_shell "Create model directory" \
+    "mkdir -p $MODEL_DIR"
+
+run_shell "Download BitNet GGUF model from HuggingFace" \
+    "wget -c -O $MODEL_FILE $MODEL_URL"
+
+# =============================================================================
+# STAGE 11 — Inference Test
+# =============================================================================
+io "Stage 11 — Inference Test"
+
+LLAMA_CLI="$BITNET_DIR/build/bin/llama-cli"
+
+run_shell "Validate model and binary exist, then run test inference" \
+    "if [[ ! -f $LLAMA_CLI ]]; then
+         echo 'llama-cli binary not found at $LLAMA_CLI'; exit 1
+     fi
+     if [[ ! -f $MODEL_FILE ]]; then
+         echo 'Model file not found at $MODEL_FILE'; exit 1
+     fi
+     $LLAMA_CLI \
+         -m $MODEL_FILE \
+         -p 'Hello, BitNet. Describe yourself in one sentence.' \
+         -n 64 \
+         --temp 0.0"
+
+# =============================================================================
+# STAGE 12 — Remote Installer
+# =============================================================================
+io "Stage 12 — Remote Installer"
+
+# WARNING: Executes arbitrary remote code. Verify URL before running.
+run_shell "Execute remote shell installer" \
+    "curl -fsSL $REMOTE_INSTALLER_URL | bash"
+
+# =============================================================================
+# STAGE 13 — Failure Report
+# =============================================================================
+io "Stage 13 — Failure Report"
+
+echo ""
+echo "============================================="
+if [[ ${#FAILED_STEPS[@]} -eq 0 ]]; then
+    echo "  ✔  All stages completed successfully."
 else
-  echo "[SKIPPED] Swapfile missing"
+    echo "  ✘  The following steps failed:"
+    for step in "${FAILED_STEPS[@]}"; do
+        echo "      -  $step"
+    done
 fi
-
-io "Adding swapfile to fstab..."
-if ! grep -q "/swap/swapfile" /etc/fstab; then
-  sudo tee -a /etc/fstab >/dev/null <<EOF
-/dev/sda4 /swap btrfs subvol=@swap,defaults,noatime,compress=no 0 0
-/swap/swapfile none swap defaults 0 0
-EOF
-fi
-
-io "Detecting resume UUID..."
-UUID=$(findmnt -no UUID -T /swap/swapfile)
-
-if [ -f /swap/swapfile ]; then
-  io "Calculating resume offset..."
-  OFFSET=$(sudo btrfs inspect-internal map-swapfile -r /swap/swapfile)
-else
-  OFFSET=""
-fi
-
-if [ -n "${UUID:-}" ] && [ -n "${OFFSET:-}" ]; then
-  run_step \
-    "Configuring GRUB kernel params" \
-    sudo sed -i \
-    "s/^GRUB_CMDLINE_LINUX_DEFAULT=\"\(.*\)\"/GRUB_CMDLINE_LINUX_DEFAULT=\"\1 resume=UUID=${UUID} resume_offset=${OFFSET}\"/" \
-    /etc/default/grub
-else
-  echo "[SKIPPED] Resume configuration"
-fi
-
-io "Ensuring resume hook exists..."
-if ! grep -q "resume" /etc/mkinitcpio.conf; then
-  sudo sed -i \
-    's/^HOOKS=(\(.*\)filesystems\(.*\))/HOOKS=(\1resume filesystems\2)/' \
-    /etc/mkinitcpio.conf
-fi
-
-run_step \
-  "Rebuilding initramfs" \
-  sudo mkinitcpio -P
-
-run_step \
-  "Regenerating GRUB config" \
-  sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-echo
-echo "======================================"
-echo "Hibernate setup complete."
-echo
-echo "Test with:"
-echo "systemctl hibernate"
-echo "======================================"
-
-REPO="$HOME/BitNet"
-MODEL_DIR="$REPO/models/BitNet-b1.58-2B-4T"
-MODEL="$MODEL_DIR/ggml-model-i2_s.gguf"
-
-run_step \
-  "Installing BitNet dependencies" \
-  sudo pacman -S --needed --noconfirm \
-  git \
-  base-devel \
-  cmake \
-  ninja \
-  clang \
-  python \
-  wget \
-  curl
-
-rm -rf "$REPO"
-
-run_step \
-  "Cloning Microsoft BitNet" \
-  git clone --recursive https://github.com/microsoft/BitNet.git "$REPO"
-
-if [ -d "$REPO" ]; then
-  run_step \
-    "Updating BitNet submodules" \
-    git -C "$REPO" submodule update --init --recursive
-fi
-
-if [ ! -d "$REPO" ]; then
-  echo "[SKIPPED] BitNet build because repository missing"
-else
-  cd "$REPO"
-
-  run_step \
-    "Configuring BitNet build" \
-    cmake -B build -G Ninja
-
-  run_step \
-    "Building BitNet" \
-    cmake --build build -j"$(nproc)"
-fi
-
-mkdir -p "$MODEL_DIR"
-
-run_step \
-  "Downloading BitNet model" \
-  wget -O "$MODEL" \
-  https://huggingface.co/microsoft/bitnet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf
-
-if [ -x "$REPO/build/bin/llama-cli" ] && [ -f "$MODEL" ]; then
-  run_step \
-    "Testing inference" \
-    "$REPO/build/bin/llama-cli" \
-    -m "$MODEL" \
-    -p "Hello." \
-    -n 64 \
-    -t "$(nproc)" \
-    -c 2048 \
-    -temp 0.7 \
-    -cnv
-else
-  echo "[SKIPPED] Inference test because binary or model missing"
-fi
-
-echo
-echo "==> Environment Variables:"
-echo "export LLAMA=\"$REPO/build/bin/llama-cli\""
-echo "export MODEL=\"$MODEL\""
-
-echo
-echo "==> Example:"
-echo "\$LLAMA -m \$MODEL -p 'Explain Linux namespaces.' -n 128 -cnv"
-
-run_shell \
-  "Running remote installer" \
-  "curl -fsSL https://ii.clsty.link/get | bash"
-
-echo
-echo "======================================"
-
-if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
-  echo "All steps completed successfully."
-else
-  echo "Some steps failed:"
-  printf ' - %s\n' "${FAILED_STEPS[@]}"
-fi
-
-echo "======================================"
+echo "============================================="
+echo ""

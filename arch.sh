@@ -10,7 +10,6 @@ set -euo pipefail
 # ── Globals ──────────────────────────────────────────────────────────────────
 USERNAME="radwrld"
 REAL_HOME="/home/$USERNAME"
-USERNAME="radwrld"
 HOSTNAME_VAL="$(cat /etc/hostname 2>/dev/null || echo unknown-host)"
 SWAP_DEVICE="/dev/sda4"
 SWAP_SIZE="8G"
@@ -284,14 +283,13 @@ critical_step "Install BitNet build dependencies" \
 critical_step "Clone Microsoft BitNet repository" \
     bash -c "
         rm -rf '$BITNET_DIR'
-        sudo -u '$USERNAME' git clone https://github.com/microsoft/BitNet.git '$BITNET_DIR'
-        cd '$BITNET_DIR'
-        sudo -u '$USERNAME' git checkout 5c19b36
+        sudo -u '$USERNAME' git clone --recursive https://github.com/microsoft/BitNet.git '$BITNET_DIR'
     "
 
 critical_step "Update git submodules" \
     bash -c "
         cd '$BITNET_DIR'
+        git submodule sync --recursive
         sudo -u '$USERNAME' git submodule update --init --recursive
     "
 
@@ -310,6 +308,15 @@ critical_step "Compile BitNet" \
         cd '$BITNET_DIR'
         sudo -u '$USERNAME' ninja -C build
     "
+
+# Optional compatibility patch for newer clang releases
+run_shell "Apply clang compatibility patch if needed" \
+    "PATCH_FILE='$BITNET_DIR/src/ggml-bitnet-mad.cpp'
+     if [[ -f \$PATCH_FILE ]]; then
+         sed -i \
+           's/int8_t \* y_col = y + col \* by;/const int8_t * y_col = y + col * by;/g' \
+           \$PATCH_FILE || true
+     fi"
 
 # =============================================================================
 # STAGE 10 — Model Download

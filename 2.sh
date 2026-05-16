@@ -180,8 +180,8 @@ run_step "Regenerate grub.cfg" \
     grub-mkconfig -o /boot/grub/grub.cfg
 
 io "Stage 12 — Remote Installer"
-
-bash <(curl -s https://ii.clsty.link/get)
+echo "Run script in a new terminal:"
+echo "bash <(curl -s https://ii.clsty.link/get)"
 
 echo
 

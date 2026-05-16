@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # 5.sh
 
-
 set -e
 set -u
 set -o pipefail
@@ -9,72 +8,57 @@ set -o pipefail
 USERNAME="radwrld"
 REAL_HOME="/home/$USERNAME"
 BITNET_DIR="$REAL_HOME/BitNet"
-MODEL_DIR="$BITNET_DIR/model"
+MODEL_SUBDIR="models/BitNet-b1.58-2B-4T"
+MODEL_DIR="$BITNET_DIR/$MODEL_SUBDIR"
 MODEL_FILE="$MODEL_DIR/ggml-model-i2_s.gguf"
-LLAMA_DIR="$REAL_HOME/llama.cpp"
 
 echo "==> [CONFIG]"
 echo "    REAL_HOME  : $REAL_HOME"
 echo "    USERNAME   : $USERNAME"
-echo "    LLAMA_DIR  : $LLAMA_DIR"
+echo "    BITNET_DIR : $BITNET_DIR"
 echo "    MODEL_FILE : $MODEL_FILE"
 
 echo ""
-echo "==> [STAGE 9] Build llama.cpp"
+echo "==> [STAGE 9] Build BitNet"
 
 echo "--> Installing build dependencies..."
-sudo pacman -S --needed --noconfirm cmake ninja clang openmp git
+sudo pacman -S --needed --noconfirm cmake ninja clang openmp git python python-pip
 
-echo "--> Removing old llama.cpp directory (if any)..."
-sudo rm -rf "$LLAMA_DIR"
+echo "--> Removing old BitNet directory (if any)..."
+sudo rm -rf "$BITNET_DIR"
 
+echo "--> Cloning BitNet from GitHub..."
+sudo -u "$USERNAME" git clone --recursive https://github.com/microsoft/BitNet.git "$BITNET_DIR"
 
-echo "--> Cloning llama.cpp from GitHub..."
-sudo -u "$USERNAME" git clone https://github.com/ggerganov/llama.cpp.git "$LLAMA_DIR"
+cd "$BITNET_DIR"
 
-echo "--> Checking out BitNet-compatible llama.cpp revision..."
-cd "$LLAMA_DIR"
-sudo -u "$USERNAME" git checkout 5e0c4b7
-
-
-echo "--> Configuring CMake build (Release + OpenMP)..."
-sudo -u "$USERNAME" cmake \
-        -S . \
-        -B "$LLAMA_DIR/build" \
-        -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DGGML_OPENMP=ON
-
-
-echo "--> Compiling with Ninja..."
-sudo -u "$USERNAME" ninja -C "$LLAMA_DIR/build"
+echo "--> Installing Python requirements..."
+sudo -u "$USERNAME" python3 -m pip install --user -r requirements.txt
 
 
 echo ""
-echo "==> [STAGE 10] Prepare BitNet GGUF Model"
+echo "==> [STAGE 10] Download Model and Build Runtime"
 
 echo "--> Creating model directory: $MODEL_DIR"
-mkdir -p "$MODEL_DIR"
+sudo -u "$USERNAME" mkdir -p "$MODEL_DIR"
 
-echo "--> Setting ownership to $USERNAME..."
-chown -R "$USERNAME":"$USERNAME" "$BITNET_DIR"
+echo "--> Downloading BitNet GGUF model..."
+sudo -u "$USERNAME" huggingface-cli download \
+    microsoft/BitNet-b1.58-2B-4T-gguf \
+    --local-dir "$MODEL_DIR"
 
-echo "--> Downloading BitNet GGUF model (resume-capable)..."
-sudo -u "$USERNAME" wget -c \
-    -O "$MODEL_FILE" \
-    "https://huggingface.co/microsoft/bitnet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf"
-
-echo "--> Model download complete."
+echo "--> Building BitNet runtime and preparing GGUF..."
+sudo -u "$USERNAME" python3 setup_env.py -md "$MODEL_SUBDIR" -q i2_s
 
 echo ""
 echo "==> [STAGE 11] Validate Runtime"
 
 LLAMA_EXEC=""
 for candidate in \
-    "$LLAMA_DIR/build/bin/llama-cli" \
-    "$LLAMA_DIR/build/bin/main" \
-    "$LLAMA_DIR/build/bin/Release/llama-cli" \
-    "$LLAMA_DIR/build/bin/Release/main"; do
+    "$BITNET_DIR/build/bin/llama-cli" \
+    "$BITNET_DIR/build/bin/main" \
+    "$BITNET_DIR/build/bin/Release/llama-cli" \
+    "$BITNET_DIR/build/bin/Release/main"; do
     if [[ -x "$candidate" ]]; then
         LLAMA_EXEC="$candidate"
         echo "--> Found executable: $LLAMA_EXEC"
@@ -91,7 +75,6 @@ if [[ ! -f "$MODEL_FILE" ]]; then
     echo "[ERROR] Model file not found: $MODEL_FILE. Aborting."
     exit 1
 fi
-
 
 echo "--> Running inference validation..."
 echo "    Prompt     : 'Hello, BitNet. Describe yourself in one sentence.'"

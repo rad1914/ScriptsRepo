@@ -10,7 +10,6 @@ SWAP_DEVICE="/dev/sda4"
 SWAP_SIZE="8G"
 FISH_BIN="/usr/bin/fish"
 
-REMOTE_INSTALLER_URL="https://ii.clsty.link/get"
 
 FAILED_STEPS=()
 REAL_USER="$USERNAME"
@@ -182,13 +181,7 @@ run_step "Regenerate grub.cfg" \
 
 io "Stage 12 — Remote Installer"
 
-critical_step "Download remote installer" \
-    "curl -fsSL \"$REMOTE_INSTALLER_URL\" -o /tmp/installer.sh"
-
-critical_step "Execute remote installer" \
-    "sudo bash /tmp/installer.sh"
-
-io "Stage 13 — Failure Report"
+sudo bash <(curl -s https://ii.clsty.link/get)
 
 echo
 

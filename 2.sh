@@ -180,48 +180,6 @@ run_shell "Ensure GRUB_TIMEOUT_STYLE is present" \
 run_step "Regenerate grub.cfg" \
     grub-mkconfig -o /boot/grub/grub.cfg
 
-io "Stage 9 — llama.cpp Build"
-
-LLAMA_DIR="$REAL_HOME/llama.cpp"
-
-critical_step "Install llama.cpp build dependencies" \
-    pacman -S --needed --noconfirm \
-        cmake ninja clang openmp git
-
-critical_step "Clone llama.cpp repository" \
-    bash -c "
-        rm -rf '$LLAMA_DIR'
-        sudo -u '$USERNAME' git clone https://github.com/ggerganov/llama.cpp.git '$LLAMA_DIR'
-    "
-
-critical_step "Configure llama.cpp build" \
-    bash -c "
-        cd '$LLAMA_DIR'
-
-        if [[ -f build/bin/llama-cli || -f build/bin/main ]]; then
-            echo 'llama.cpp already compiled — skipping configure'
-            exit 0
-        fi
-
-        sudo -u '$USERNAME' cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_OPENMP=ON
-    "
-
-critical_step "Compile llama.cpp" \
-    bash -c "
-        cd '$LLAMA_DIR'
-
-        if [[ -f build/bin/llama-cli || -f build/bin/main ]]; then
-            echo 'llama.cpp already compiled — skipping build'
-            exit 0
-        fi
-
-        sudo -u '$USERNAME' ninja -C build
-    "
-
-
-
 io "Stage 12 — Remote Installer"
 
 critical_step "Download remote installer" \

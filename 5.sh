@@ -34,7 +34,7 @@ sudo -u "$USERNAME" git clone https://github.com/ggerganov/llama.cpp.git "$LLAMA
 
 echo "--> Checking out BitNet-compatible llama.cpp revision..."
 cd "$LLAMA_DIR"
-sudo -u "$USERNAME" git checkout b2598
+sudo -u "$USERNAME" git checkout 5e0c4b7
 
 
 echo "--> Configuring CMake build (Release + OpenMP)..."

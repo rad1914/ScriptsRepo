@@ -145,7 +145,6 @@ io "Stage 5 — Shell Configuration"
 if [[ -x "$FISH_BIN" ]]; then
     run_shell "Set fish as default login shell" \
         "chsh -s $FISH_BIN $USERNAME"
-        chsh root /usr/bin/fish
 else
     FAILED_STEPS+=("Set fish as default shell (fish binary not found)")
     echo "  ✘  fish not found at $FISH_BIN"

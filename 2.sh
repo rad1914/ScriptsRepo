@@ -19,39 +19,47 @@ FAILED_STEPS=()
 REAL_USER="$USERNAME"
 
 io() {
-    printf '\n  ▶  %s\n\n' "$*"
+    echo ""
+    echo "  ▶  $*"
+    echo ""
 }
 
-run() {
-    local msg="$1"
+run_step() {
+    local desc="$1"
+    shift
+    io "$desc"
+    if "$@"; then
+        echo "  ✔  $desc"
+    else
+        echo "  ✘  FAILED: $desc"
+        FAILED_STEPS+=("$desc")
+    fi
+}
+
+run_shell() {
+    local desc="$1"
+    local cmd="$2"
+    io "$desc"
+    if bash -c "$cmd"; then
+        echo "  ✔  $desc"
+    else
+        echo "  ✘  FAILED: $desc"
+        FAILED_STEPS+=("$desc")
+    fi
+}
+
+critical_step() {
+    local desc="$1"
     shift
 
-    io "$msg"
+    io "$desc"
 
-    "$@" \
-        && echo "  ✔  $msg" \
-        || {
-            echo "  ✘  FAILED: $msg"
-            FAILED_STEPS+=("$msg")
-        }
-}
-
-run_sh() {
-    run "$1" bash -c "$2"
-}
-
-critical() {
-    local msg="$1"
-    shift
-
-    io "$msg"
-
-    "$@" \
-        && echo "  ✔  $msg" \
-        || {
-            echo "  ✘  FATAL: $msg"
-            exit 1
-        }
+    if "$@"; then
+        echo "  ✔  $desc"
+    else
+        echo "  ✘  FATAL: $desc"
+        exit 1
+    fi
 }
 
 io "Stage 1 — System Update"

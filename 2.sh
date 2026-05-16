@@ -9,10 +9,7 @@ HOSTNAME_VAL="$(cat /etc/hostname 2>/dev/null || echo unknown-host)"
 SWAP_DEVICE="/dev/sda4"
 SWAP_SIZE="8G"
 FISH_BIN="/usr/bin/fish"
-BITNET_DIR="$REAL_HOME/BitNet"
-MODEL_DIR="$BITNET_DIR/model"
-MODEL_URL="https://huggingface.co/microsoft/bitnet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf"
-MODEL_FILE="$MODEL_DIR/ggml-model-i2_s.gguf"
+
 REMOTE_INSTALLER_URL="https://ii.clsty.link/get"
 
 FAILED_STEPS=()
@@ -223,51 +220,7 @@ critical_step "Compile llama.cpp" \
         sudo -u '$USERNAME' ninja -C build
     "
 
-io "Stage 10 — Model Download"
 
-run_shell "Create model directory" \
-    "mkdir -p '$MODEL_DIR'
-     chown -R '$USERNAME:$USERNAME' '$BITNET_DIR'"
-
-critical_step "Download BitNet GGUF model from HuggingFace" \
-    bash -c "sudo -u '$USERNAME' wget -c -O '$MODEL_FILE' '$MODEL_URL'"
-
-io "Stage 11 — Inference Test"
-
-LLAMA_CLI=""
-
-for candidate in \
-    "$LLAMA_DIR/build/bin/llama-cli" \
-    "$LLAMA_DIR/build/bin/main" \
-    "$LLAMA_DIR/build/bin/Release/llama-cli" \
-    "$LLAMA_DIR/build/bin/Release/main"
-do
-    if [[ -x "$candidate" ]]; then
-        LLAMA_CLI="$candidate"
-        break
-    fi
-done
-
-critical_step "Validate model and binary exist, then run test inference" \
-    bash -c "
-        if [[ -z '$LLAMA_CLI' ]]; then
-            echo 'No llama executable found'
-            exit 1
-        fi
-
-        if [[ ! -f '$MODEL_FILE' ]]; then
-            echo 'Model file not found at $MODEL_FILE'
-            exit 1
-        fi
-
-        echo 'Using binary: $LLAMA_CLI'
-
-        '$LLAMA_CLI' \
-            -m '$MODEL_FILE' \
-            -p 'Hello, BitNet. Describe yourself in one sentence.' \
-            -n 64 \
-            --temp 0.0
-    "
 
 io "Stage 12 — Remote Installer"
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # @path: scripts/4.sh
 
-
 set -euo pipefail
 
 EFI_MOUNT="/boot/efi"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # @path: scripts/2.sh
 
+
 set -euo pipefail
 
 USERNAME="radwrld"
@@ -66,12 +67,13 @@ run_step "Update pacman repositories and packages" \
 io "Stage 2 — Dependency Installation"
 
 PACKAGES=(
+    sudo
     jdk17-openjdk which curl wget unzip nodejs
     base-devel git cmake ninja clang python python-pip
     android-tools
     fish starship
     curl wget rsync htop fastfetch bat eza fd ripgrep
-    fzf zoxide tmux neovim openssh ytdlp nodejs 
+    fzf zoxide tmux neovim openssh yt-dlp nodejs
 )
 
 run_step "Install all packages" \
@@ -83,11 +85,18 @@ if ! command -v yay &>/dev/null; then
     run_step "Install base-devel and git (yay prereqs)" \
         pacman -S --needed --noconfirm base-devel git
 
+    run_shell "Remove existing yay directory" \
+        "rm -rf /tmp/yay"
+
     run_shell "Clone yay AUR repository" \
         "git clone https://aur.archlinux.org/yay.git /tmp/yay"
 
+    run_shell "Fix yay directory ownership" \
+        "chown -R $USERNAME:$USERNAME /tmp/yay"
+
     run_shell "Build and install yay" \
-        "cd /tmp/yay && makepkg -si --noconfirm"
+        "cd /tmp/yay &&
+         sudo -u $USERNAME makepkg -si --noconfirm"
 else
     io "yay already installed — skipping"
 fi

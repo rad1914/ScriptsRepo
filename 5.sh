@@ -28,6 +28,7 @@ sudo pacman -S --needed --noconfirm \
     ninja \
     clang \
     openmp \
+    llvm-openmp \
     git \
     python \
     python-pip \
@@ -77,6 +78,16 @@ sudo -u "$USERNAME" bash <<EOF
 set -e
 
 cd "$BITNET_DIR"
+
+echo "--> Patching ggml-bitnet-mad.cpp for Clang const correctness..."
+sed -i \
+    's/int8_t \* y_col = y + col \* by;/const int8_t * y_col = y + col * by;/' \
+    src/ggml-bitnet-mad.cpp
+
+export CC=clang
+export CXX=clang++
+export CMAKE_C_COMPILER=clang
+export CMAKE_CXX_COMPILER=clang++
 
 source .venv/bin/activate
 

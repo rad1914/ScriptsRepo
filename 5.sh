@@ -5,6 +5,7 @@ set -e
 set -u
 set -o pipefail
 
+USERNAME="radwrld"
 REAL_HOME="/home/$USERNAME"
 BITNET_DIR="$REAL_HOME/BitNet"
 MODEL_DIR="$BITNET_DIR/model"

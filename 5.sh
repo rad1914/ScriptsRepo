@@ -22,7 +22,7 @@ echo ""
 echo "==> [STAGE 9] Build BitNet"
 
 echo "--> Installing build dependencies..."
-sudo pacman -S --needed --noconfirm cmake ninja clang openmp git python python-pip python-virtualenv
+sudo pacman -S --needed --noconfirm cmake ninja clang openmp git python python-pip python-virtualenv python312
 
 echo "--> Removing old BitNet directory (if any)..."
 sudo rm -rf "$BITNET_DIR"
@@ -38,7 +38,7 @@ set -e
 
 cd "$BITNET_DIR"
 
-python3 -m venv .venv
+python3.12 -m venv .venv
 
 source .venv/bin/activate
 
@@ -67,7 +67,7 @@ cd "$BITNET_DIR"
 
 source .venv/bin/activate
 
-python3 setup_env.py -md "$MODEL_SUBDIR" -q i2_s
+python3.12 setup_env.py -md "$MODEL_SUBDIR" -q i2_s
 EOF
 
 echo ""

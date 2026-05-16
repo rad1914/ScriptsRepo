@@ -28,7 +28,6 @@ sudo pacman -S --needed --noconfirm \
     ninja \
     clang \
     openmp \
-    llvm-openmp \
     git \
     python \
     python-pip \
@@ -77,20 +76,23 @@ echo "--> Building BitNet runtime and preparing GGUF..."
 sudo -u "$USERNAME" bash <<EOF
 set -e
 
+PATCH_FILE="$BITNET_DIR/src/ggml-bitnet-mad.cpp"
+
 cd "$BITNET_DIR"
 
-echo "--> Patching ggml-bitnet-mad.cpp for Clang const correctness..."
-sed -i \
-    's/int8_t \* y_col = y + col \* by;/const int8_t * y_col = y + col * by;/' \
-    src/ggml-bitnet-mad.cpp
+source .venv/bin/activate
 
 export CC=clang
 export CXX=clang++
 export CMAKE_C_COMPILER=clang
 export CMAKE_CXX_COMPILER=clang++
 
-source .venv/bin/activate
+echo "--> Applying Clang const-correctness patch..."
+sed -i \
+    's/int8_t \* y_col = y + col \* by;/const int8_t * y_col = y + col * by;/' \
+    "\$PATCH_FILE"
 
+echo "--> Building BitNet runtime..."
 python setup_env.py -md "$MODEL_SUBDIR" -q i2_s
 EOF
 

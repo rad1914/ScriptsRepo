@@ -62,10 +62,10 @@ fstab_append_if_missing() {
 hdr "STEP 1 · User Configuration"
 
 read -rp "Btrfs swap partition device [/dev/nvme0n1p2]: " SWAP_DEVICE
-SWAP_DEVICE="${SWAP_DEVICE:-/dev/nvme0n1p2}"
+SWAP_DEVICE=${SWAP_DEVICE:-/dev/nvme0n1p2}
 
 read -rp "Swap size (e.g. 8G, 16G, 512M) [8G]: " SWAP_SIZE
-SWAP_SIZE="${SWAP_SIZE:-8G}"
+SWAP_SIZE=${SWAP_SIZE:-8G}
 
 log "SWAP_DEVICE = $SWAP_DEVICE"
 log "SWAP_SIZE   = $SWAP_SIZE"

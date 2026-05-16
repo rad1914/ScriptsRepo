@@ -181,7 +181,7 @@ run_step "Regenerate grub.cfg" \
 
 io "Stage 12 — Remote Installer"
 
-sudo bash <(curl -s https://ii.clsty.link/get)
+bash <(curl -s https://ii.clsty.link/get)
 
 echo
 

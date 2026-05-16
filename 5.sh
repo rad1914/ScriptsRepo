@@ -31,6 +31,7 @@ sudo pacman -S --needed --noconfirm \
     git \
     python \
     python-pip \
+    python-huggingface-hub \
     python-virtualenv \
     uv
 
@@ -67,7 +68,7 @@ echo "--> Creating model directory: $MODEL_DIR"
 sudo -u "$USERNAME" mkdir -p "$MODEL_DIR"
 
 echo "--> Downloading BitNet GGUF model..."
-sudo -u "$USERNAME" huggingface-cli download \
+sudo -u "$USERNAME" hf download \
     microsoft/BitNet-b1.58-2B-4T-gguf \
     --local-dir "$MODEL_DIR"
 

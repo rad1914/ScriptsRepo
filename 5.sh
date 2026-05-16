@@ -22,7 +22,7 @@ echo ""
 echo "==> [STAGE 9] Build BitNet"
 
 echo "--> Installing build dependencies..."
-sudo pacman -S --needed --noconfirm cmake ninja clang openmp git python python-pip
+sudo pacman -S --needed --noconfirm cmake ninja clang openmp git python python-pip python-virtualenv
 
 echo "--> Removing old BitNet directory (if any)..."
 sudo rm -rf "$BITNET_DIR"
@@ -33,7 +33,19 @@ sudo -u "$USERNAME" git clone --recursive https://github.com/microsoft/BitNet.gi
 cd "$BITNET_DIR"
 
 echo "--> Installing Python requirements..."
-sudo -u "$USERNAME" python3 -m pip install --user -r requirements.txt
+sudo -u "$USERNAME" bash <<EOF
+set -e
+
+cd "$BITNET_DIR"
+
+python3 -m venv .venv
+
+source .venv/bin/activate
+
+pip install --upgrade pip
+
+pip install -r requirements.txt
+EOF
 
 
 echo ""
@@ -48,7 +60,15 @@ sudo -u "$USERNAME" huggingface-cli download \
     --local-dir "$MODEL_DIR"
 
 echo "--> Building BitNet runtime and preparing GGUF..."
-sudo -u "$USERNAME" python3 setup_env.py -md "$MODEL_SUBDIR" -q i2_s
+sudo -u "$USERNAME" bash <<EOF
+set -e
+
+cd "$BITNET_DIR"
+
+source .venv/bin/activate
+
+python3 setup_env.py -md "$MODEL_SUBDIR" -q i2_s
+EOF
 
 echo ""
 echo "==> [STAGE 11] Validate Runtime"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 5.sh
 
+
 set -e
 set -u
 set -o pipefail
@@ -27,37 +28,27 @@ sudo pacman -S --needed --noconfirm cmake ninja clang openmp git
 echo "--> Removing old llama.cpp directory (if any)..."
 sudo rm -rf "$LLAMA_DIR"
 
+
 echo "--> Cloning llama.cpp from GitHub..."
 sudo -u "$USERNAME" git clone https://github.com/ggerganov/llama.cpp.git "$LLAMA_DIR"
 
-LLAMA_EXEC=""
-for candidate in \
-    "$LLAMA_DIR/build/bin/llama-cli" \
-    "$LLAMA_DIR/build/bin/main" \
-    "$LLAMA_DIR/build/bin/Release/llama-cli" \
-    "$LLAMA_DIR/build/bin/Release/main"; do
-    if [[ -x "$candidate" ]]; then
-        LLAMA_EXEC="$candidate"
-        break
-    fi
-done
+echo "--> Checking out BitNet-compatible llama.cpp revision..."
+cd "$LLAMA_DIR"
+sudo -u "$USERNAME" git checkout b2598
 
-if [[ -n "$LLAMA_EXEC" ]]; then
-    echo "--> Executable already exists at: $LLAMA_EXEC — skipping build."
-else
 
-    echo "--> Configuring CMake build (Release + OpenMP)..."
-    sudo -u "$USERNAME" cmake \
-        -S "$LLAMA_DIR" \
+echo "--> Configuring CMake build (Release + OpenMP)..."
+sudo -u "$USERNAME" cmake \
+        -S . \
         -B "$LLAMA_DIR/build" \
         -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_OPENMP=ON
 
-    # --- 9.5 Compile ---
-    echo "--> Compiling with Ninja..."
-    sudo -u "$USERNAME" ninja -C "$LLAMA_DIR/build"
-fi
+
+echo "--> Compiling with Ninja..."
+sudo -u "$USERNAME" ninja -C "$LLAMA_DIR/build"
+
 
 echo ""
 echo "==> [STAGE 10] Prepare BitNet GGUF Model"

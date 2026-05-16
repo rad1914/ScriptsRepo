@@ -5,6 +5,7 @@ set -e
 set -u
 set -o pipefail
 
+REAL_HOME="/home/$USERNAME"
 BITNET_DIR="$REAL_HOME/BitNet"
 MODEL_DIR="$BITNET_DIR/model"
 MODEL_FILE="$MODEL_DIR/ggml-model-i2_s.gguf"

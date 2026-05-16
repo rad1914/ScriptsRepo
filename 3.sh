@@ -61,8 +61,17 @@ fstab_append_if_missing() {
 
 hdr "STEP 1 · User Configuration"
 
-read -rp "Btrfs swap partition device [/dev/nvme0n1p2]: " SWAP_DEVICE
-SWAP_DEVICE=${SWAP_DEVICE:-/dev/nvme0n1p2}
+echo
+lsblk -fp
+echo
+
+read -rp "Enter Btrfs root partition device for swap setup (example: /dev/sda2): " SWAP_DEVICE
+
+[[ -n "$SWAP_DEVICE" ]] \
+    || die "No swap partition device provided."
+
+[[ -b "$SWAP_DEVICE" ]] \
+    || die "Device '$SWAP_DEVICE' is not a valid block device."
 
 read -rp "Swap size (e.g. 8G, 16G, 512M) [8G]: " SWAP_SIZE
 SWAP_SIZE=${SWAP_SIZE:-8G}
@@ -70,7 +79,6 @@ SWAP_SIZE=${SWAP_SIZE:-8G}
 log "SWAP_DEVICE = $SWAP_DEVICE"
 log "SWAP_SIZE   = $SWAP_SIZE"
 
-[[ -b "$SWAP_DEVICE" ]] || die "Device '$SWAP_DEVICE' is not a valid block device."
 [[ -f "$GRUB_CFG"    ]] || die "GRUB config not found at '$GRUB_CFG'."
 [[ -f "$MKINITCPIO_CFG" ]] || die "mkinitcpio.conf not found at '$MKINITCPIO_CFG'."
 
